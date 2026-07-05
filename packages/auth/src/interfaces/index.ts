@@ -1,3 +1,5 @@
+// ── Existing Interfaces ──
+
 export interface IRBACProvider {
   /** Check if a role has permission for a specific action on a resource */
   checkPermission(role: string, action: string, resource: string): Promise<boolean>;
@@ -53,4 +55,61 @@ export interface AuditQuery {
   endDate?: Date;
   limit?: number;
   offset?: number;
+}
+
+// ── Sprint 1.2 New Interfaces ──
+
+export interface IRateLimiter {
+  /** Check if a request is allowed under the rate limit, optionally with a specific cost */
+  check(key: string, cost?: number): Promise<{ allowed: boolean; remaining: number; resetAt: number }>;
+}
+
+export interface IBottleneckConfig {
+  /** Maximum tokens in the bucket */
+  maxTokens: number;
+  /** Rate at which tokens are refilled per interval */
+  refillRate: number;
+  /** Interval in milliseconds for token refill */
+  refillIntervalMs: number;
+}
+
+export interface IEncryptionManager {
+  /** Encrypt plaintext using the specified key */
+  encrypt(plaintext: string, keyId: string): Promise<string>;
+  /** Decrypt ciphertext using the associated key */
+  decrypt(ciphertext: string): Promise<string>;
+  /** Generate a new encryption key with the given identifier */
+  generateKey(keyId: string): Promise<void>;
+  /** Rotate an existing key (generate a new version) */
+  rotateKey(keyId: string): Promise<void>;
+  /** List all available key identifiers */
+  listKeys(): Promise<string[]>;
+}
+
+export interface ISCIMUser {
+  /** Unique identifier for the user */
+  id: string;
+  /** Unique username/login name */
+  userName: string;
+  /** Human-readable display name */
+  displayName: string;
+  /** Email addresses associated with the user */
+  emails: string[];
+  /** Whether the user account is active */
+  active: boolean;
+  /** Roles assigned to the user */
+  roles: string[];
+}
+
+export interface ISCIMSyncProvider {
+  /** Create a new user in the external identity provider */
+  createUser(user: ISCIMUser): Promise<ISCIMUser>;
+  /** Update an existing user in the external identity provider */
+  updateUser(user: ISCIMUser): Promise<ISCIMUser>;
+  /** Delete a user from the external identity provider */
+  deleteUser(userId: string): Promise<void>;
+  /** List all users from the external identity provider */
+  listUsers(): Promise<ISCIMUser[]>;
+  /** Perform a full synchronization of all users */
+  syncAll(): Promise<{ created: number; updated: number; deleted: number }>;
 }

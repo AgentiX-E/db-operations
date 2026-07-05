@@ -6,6 +6,11 @@ import type {
   IAuditStore,
   AuditEvent,
   AuditQuery,
+  IRateLimiter,
+  IBottleneckConfig,
+  IEncryptionManager,
+  ISCIMUser,
+  ISCIMSyncProvider,
 } from '../interfaces/index.js';
 
 function createMockAuditEvent(overrides: Partial<AuditEvent> = {}): AuditEvent {
@@ -129,5 +134,193 @@ describe('IAuditStore', () => {
     expect(event).toHaveProperty('resource');
     expect(event).toHaveProperty('result');
     expect(event.details?.reason).toBe('unauthorized');
+  });
+});
+
+// ── Sprint 1.2: New Interface Tests ──
+
+describe('IRateLimiter', () => {
+  const mockRateLimiter: IRateLimiter = {
+    check: vi.fn().mockImplementation(async (key: string, _cost?: number) => ({
+      allowed: key !== 'over-limit-key',
+      remaining: key === 'over-limit-key' ? 0 : 10,
+      resetAt: Date.now() + 60000,
+    })),
+  };
+
+  it('should allow requests within limit', async () => {
+    const result = await mockRateLimiter.check('normal-key');
+    expect(result.allowed).toBe(true);
+    expect(result.remaining).toBeGreaterThan(0);
+    expect(typeof result.resetAt).toBe('number');
+  });
+
+  it('should deny requests over limit', async () => {
+    const result = await mockRateLimiter.check('over-limit-key');
+    expect(result.allowed).toBe(false);
+    expect(result.remaining).toBe(0);
+  });
+
+  it('should accept optional cost parameter', async () => {
+    const result = await mockRateLimiter.check('bulk-key', 5);
+    expect(mockRateLimiter.check).toHaveBeenCalledWith('bulk-key', 5);
+    expect(result).toHaveProperty('allowed');
+    expect(result).toHaveProperty('remaining');
+    expect(result).toHaveProperty('resetAt');
+  });
+
+  it('should return proper response structure', async () => {
+    const result = await mockRateLimiter.check('key');
+    expect(result).toHaveProperty('allowed');
+    expect(result).toHaveProperty('remaining');
+    expect(result).toHaveProperty('resetAt');
+    expect(typeof result.allowed).toBe('boolean');
+    expect(typeof result.remaining).toBe('number');
+    expect(typeof result.resetAt).toBe('number');
+  });
+});
+
+describe('IBottleneckConfig', () => {
+  it('should create a valid bottleneck config', () => {
+    const config: IBottleneckConfig = {
+      maxTokens: 100,
+      refillRate: 10,
+      refillIntervalMs: 1000,
+    };
+    expect(config.maxTokens).toBeGreaterThan(0);
+    expect(config.refillRate).toBeGreaterThan(0);
+    expect(config.refillIntervalMs).toBeGreaterThan(0);
+  });
+
+  it('should have all required properties', () => {
+    const config: IBottleneckConfig = {
+      maxTokens: 50,
+      refillRate: 5,
+      refillIntervalMs: 500,
+    };
+    expect(config).toHaveProperty('maxTokens');
+    expect(config).toHaveProperty('refillRate');
+    expect(config).toHaveProperty('refillIntervalMs');
+  });
+});
+
+describe('IEncryptionManager', () => {
+  const mockEncryption: IEncryptionManager = {
+    encrypt: vi.fn().mockResolvedValue('encrypted-base64-string'),
+    decrypt: vi.fn().mockResolvedValue('original-plaintext'),
+    generateKey: vi.fn().mockResolvedValue(undefined),
+    rotateKey: vi.fn().mockResolvedValue(undefined),
+    listKeys: vi.fn().mockResolvedValue(['key-a', 'key-b', 'key-c']),
+  };
+
+  it('should encrypt plaintext', async () => {
+    const result = await mockEncryption.encrypt('sensitive-data', 'key-1');
+    expect(typeof result).toBe('string');
+    expect(result).toBe('encrypted-base64-string');
+  });
+
+  it('should decrypt ciphertext', async () => {
+    const result = await mockEncryption.decrypt('encrypted-base64-string');
+    expect(result).toBe('original-plaintext');
+  });
+
+  it('should generate a new key', async () => {
+    await expect(mockEncryption.generateKey('new-key')).resolves.toBeUndefined();
+  });
+
+  it('should rotate an existing key', async () => {
+    await expect(mockEncryption.rotateKey('existing-key')).resolves.toBeUndefined();
+  });
+
+  it('should list available keys', async () => {
+    const keys = await mockEncryption.listKeys();
+    expect(Array.isArray(keys)).toBe(true);
+    expect(keys).toContain('key-a');
+    expect(keys).toContain('key-b');
+  });
+});
+
+describe('ISCIMUser', () => {
+  it('should create a valid SCIM user', () => {
+    const user: ISCIMUser = {
+      id: 'user-abc-123',
+      userName: 'jdoe',
+      displayName: 'John Doe',
+      emails: ['jdoe@example.com'],
+      active: true,
+      roles: ['admin', 'operator'],
+    };
+    expect(user.id).toBe('user-abc-123');
+    expect(user.userName).toBe('jdoe');
+    expect(user.active).toBe(true);
+    expect(Array.isArray(user.emails)).toBe(true);
+    expect(Array.isArray(user.roles)).toBe(true);
+  });
+
+  it('should have all required properties', () => {
+    const user: ISCIMUser = {
+      id: 'user-1',
+      userName: 'testuser',
+      displayName: 'Test User',
+      emails: [],
+      active: false,
+      roles: [],
+    };
+    expect(user).toHaveProperty('id');
+    expect(user).toHaveProperty('userName');
+    expect(user).toHaveProperty('displayName');
+    expect(user).toHaveProperty('emails');
+    expect(user).toHaveProperty('active');
+    expect(user).toHaveProperty('roles');
+  });
+});
+
+describe('ISCIMSyncProvider', () => {
+  const mockUser: ISCIMUser = {
+    id: 'user-1',
+    userName: 'jdoe',
+    displayName: 'John Doe',
+    emails: ['jdoe@example.com'],
+    active: true,
+    roles: ['user'],
+  };
+
+  const mockSyncProvider: ISCIMSyncProvider = {
+    createUser: vi.fn().mockResolvedValue(mockUser),
+    updateUser: vi.fn().mockResolvedValue({ ...mockUser, displayName: 'John Updated' }),
+    deleteUser: vi.fn().mockResolvedValue(undefined),
+    listUsers: vi.fn().mockResolvedValue([mockUser]),
+    syncAll: vi.fn().mockResolvedValue({ created: 1, updated: 2, deleted: 0 }),
+  };
+
+  it('should create a user', async () => {
+    const user = await mockSyncProvider.createUser(mockUser);
+    expect(user.id).toBe('user-1');
+    expect(user.userName).toBe('jdoe');
+  });
+
+  it('should update a user', async () => {
+    const updated = await mockSyncProvider.updateUser({ ...mockUser, displayName: 'John Updated' });
+    expect(updated.displayName).toBe('John Updated');
+  });
+
+  it('should delete a user', async () => {
+    await expect(mockSyncProvider.deleteUser('user-1')).resolves.toBeUndefined();
+  });
+
+  it('should list all users', async () => {
+    const users = await mockSyncProvider.listUsers();
+    expect(Array.isArray(users)).toBe(true);
+    expect(users[0]).toHaveProperty('userName');
+  });
+
+  it('should perform full sync and return counts', async () => {
+    const result = await mockSyncProvider.syncAll();
+    expect(result).toHaveProperty('created');
+    expect(result).toHaveProperty('updated');
+    expect(result).toHaveProperty('deleted');
+    expect(typeof result.created).toBe('number');
+    expect(typeof result.updated).toBe('number');
+    expect(typeof result.deleted).toBe('number');
   });
 });

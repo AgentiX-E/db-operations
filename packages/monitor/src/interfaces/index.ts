@@ -1,3 +1,5 @@
+// ── Existing Interfaces ──
+
 export interface IMetricsRegistry {
   /** Increment a counter metric */
   incrementCounter(name: string, labels?: Record<string, string>, value?: number): void;
@@ -92,4 +94,78 @@ export interface HealthCheckResult {
   overall: boolean;
   components: ComponentStatus[];
   timestamp: Date;
+}
+
+// ── Sprint 1.2 New Interfaces ──
+
+export interface IDeadlockInfo {
+  /** Cycle of transactions involved in the deadlock */
+  cycle: string[];
+  /** The transaction chosen as the victim to resolve the deadlock */
+  victimTransaction: string;
+  /** Timestamp when the deadlock was detected */
+  detectedAt: Date;
+}
+
+export interface IDeadlockDetector {
+  /** Start monitoring for deadlocks */
+  start(): Promise<void>;
+  /** Stop monitoring for deadlocks */
+  stop(): Promise<void>;
+  /** Callback invoked when a deadlock is detected */
+  onDeadlock(callback: (info: IDeadlockInfo) => void): void;
+  /** Get the history of detected deadlocks */
+  getDeadlockHistory(): Promise<IDeadlockInfo[]>;
+}
+
+export interface IConnectionInfo {
+  /** Connection identifier */
+  id: string;
+  /** Database user name */
+  user: string;
+  /** Database name the connection is attached to */
+  database: string;
+  /** Current connection state (active, idle, idle in transaction, etc.) */
+  state: string;
+  /** Currently executing query, if any */
+  query?: string;
+  /** Timestamp when the connection was established */
+  connectedAt: Date;
+  /** Whether the connection is idle in a transaction */
+  idleInTransaction: boolean;
+}
+
+export interface IConnectionMonitor {
+  /** Start monitoring connections */
+  start(): Promise<void>;
+  /** Stop monitoring connections */
+  stop(): Promise<void>;
+  /** Get information about all current connections */
+  getConnections(): Promise<IConnectionInfo[]>;
+  /** Get current pool utilization statistics */
+  getPoolUtilization(): Promise<{ total: number; active: number; idle: number; waiting: number }>;
+  /** Callback invoked when the connection pool is exhausted */
+  onExhaustion(callback: (stats: { total: number; active: number; waiting: number }) => void): void;
+}
+
+export interface IResourceQuota {
+  /** Maximum CPU usage (percentage or cores) */
+  cpuLimit: number;
+  /** Maximum memory usage in MB */
+  memoryLimitMB: number;
+  /** Maximum number of concurrent connections */
+  connectionLimit: number;
+  /** Maximum query rate (queries per second/minute) */
+  queryRateLimit: number;
+}
+
+export interface IResourceQuotaManager {
+  /** Set the resource quota for a given role */
+  setQuota(roleId: string, quota: IResourceQuota): Promise<void>;
+  /** Get the resource quota for a given role */
+  getQuota(roleId: string): Promise<IResourceQuota | null>;
+  /** Check whether a role is allowed to consume the requested resources */
+  checkQuota(roleId: string): Promise<{ allowed: boolean; reason?: string }>;
+  /** Get current resource usage for a given role */
+  getUsage(roleId: string): Promise<{ cpu: number; memoryMB: number; connections: number; queryRate: number }>;
 }

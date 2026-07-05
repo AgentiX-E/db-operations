@@ -1,3 +1,5 @@
+// ── Existing Interfaces ──
+
 export interface IBackupManager {
   /** Create a new backup */
   createBackup(metadata: BackupMetadata): Promise<string>;
@@ -77,4 +79,59 @@ export interface StorageUsage {
   usedBytes: number;
   freeBytes: number;
   backupCount: number;
+}
+
+// ── Sprint 1.2 New Interfaces ──
+
+export interface IBackupScheduleConfig {
+  /** Whether the scheduled backup is enabled */
+  enabled: boolean;
+  /** Interval between scheduled backups in milliseconds */
+  intervalMs: number;
+  /** Number of backups to retain (FIFO rotation) */
+  retentionCount: number;
+}
+
+export interface IBackupScheduler {
+  /** Start the backup scheduler */
+  start(): Promise<void>;
+  /** Stop the backup scheduler */
+  stop(): Promise<void>;
+  /** Get the timestamp of the next scheduled backup */
+  getNextScheduled(): Promise<Date | null>;
+  /** Trigger an immediate backup outside the normal schedule */
+  triggerNow(): Promise<string>;
+  /** Callback invoked when a scheduled backup completes and is ready */
+  onBackupReady(callback: (backupId: string) => void): void;
+}
+
+export interface IBackupManifest {
+  /** Unique backup identifier */
+  id: string;
+  /** Backup metadata */
+  metadata: BackupMetadata;
+  /** Current backup status */
+  status: BackupStatus;
+  /** Backup size in bytes */
+  sizeBytes: number;
+  /** Timestamp when the backup was created */
+  createdAt: Date;
+}
+
+export interface IBackupRetentionRule {
+  /** Maximum number of backups to retain */
+  maxCount: number;
+  /** Maximum age of a backup in days before it can be removed */
+  maxAgeDays: number;
+  /** Minimum interval in hours between retained backups */
+  minInterval: number;
+}
+
+export interface IBackupRetentionPolicy {
+  /** Evaluate a list of backup manifests and return those eligible for deletion */
+  evaluate(manifests: IBackupManifest[]): Promise<IBackupManifest[]>;
+  /** Get the current retention policy configuration */
+  getPolicy(): Promise<IBackupRetentionRule[]>;
+  /** Set a new retention policy configuration */
+  setPolicy(rules: IBackupRetentionRule[]): Promise<void>;
 }

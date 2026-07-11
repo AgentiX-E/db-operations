@@ -1,137 +1,173 @@
-// ── Existing Interfaces ──
+/**
+ * backup interfaces — Engine-agnostic backup and PITR abstraction.
+ *
+ * Defines three layers:
+ *   1. IBackupManager — orchestration (create, list, restore, prune)
+ *   2. IPITRManager — point-in-time recovery (continuous WAL archiving, PITR)
+ *   3. IStorageBackend — pluggable storage (local FS, S3, GCS, etc.)
+ *   4. IBackupRetentionPolicy — pluggable retention/purge logic
+ *
+ * @module @agentix-e/db-operations-backup/interfaces
+ */
 
+import type {
+  BackupMetadata,
+  BackupResult,
+  RestoreResult,
+  PITRTarget,
+  RetentionPolicy,
+  SnapshotType,
+} from '@agentix-e/db-operations-core/types';
+
+/** Options for creating a backup. */
+export interface CreateBackupOptions {
+  /** Snapshot type. */
+  type: SnapshotType;
+  /** Optional description or tags. */
+  tags?: Record<string, string>;
+  /** Timeout in milliseconds. */
+  timeoutMs?: number;
+}
+
+/** Options for listing backups. */
+export interface ListBackupsOptions {
+  /** Filter by type. */
+  type?: SnapshotType;
+  /** Limit the number of results. */
+  limit?: number;
+  /** Return only snapshots newer than this timestamp (ISO-8601). */
+  newerThan?: string;
+}
+
+/** Options for restoring from a backup. */
+export interface RestoreOptions {
+  /** Target shard IDs to restore (empty = all). */
+  shardIds?: string[];
+  /** Skip integrity verification. */
+  skipVerification?: boolean;
+  /** Timeout in milliseconds. */
+  timeoutMs?: number;
+}
+
+/**
+ * Backup manager — top-level backup orchestration.
+ */
 export interface IBackupManager {
-  /** Create a new backup */
-  createBackup(metadata: BackupMetadata): Promise<string>;
-  /** Restore from a specific backup */
-  restore(backupId: string, targetDatabase?: string): Promise<void>;
-  /** List all available backups */
-  listBackups(filters?: BackupFilter): Promise<BackupEntry[]>;
-  /** Delete a backup */
-  deleteBackup(backupId: string): Promise<void>;
-  /** Get backup status */
-  getStatus(backupId: string): Promise<BackupStatus>;
+  /**
+   * Create a backup snapshot.
+   */
+  createBackup(options: CreateBackupOptions): Promise<BackupResult>;
+
+  /**
+   * List all available backup snapshots.
+   */
+  listBackups(options?: ListBackupsOptions): Promise<BackupMetadata[]>;
+
+  /**
+   * Get metadata for a specific snapshot.
+   */
+  getBackup(snapshotId: string): Promise<BackupMetadata | null>;
+
+  /**
+   * Delete a backup snapshot.
+   */
+  deleteBackup(snapshotId: string): Promise<boolean>;
+
+  /**
+   * Restore from a backup snapshot.
+   */
+  restoreFromSnapshot(snapshotId: string, options?: RestoreOptions): Promise<RestoreResult>;
+
+  /**
+   * Execute point-in-time recovery to a specific target.
+   * Wraps IPITRManager with additional coordination.
+   */
+  pitr(target: PITRTarget, options?: RestoreOptions): Promise<RestoreResult>;
+
+  /**
+   * Prune old backups according to the retention policy.
+   * Returns number of deleted snapshots.
+   */
+  prune(): Promise<number>;
 }
 
-export interface BackupMetadata {
-  database: string;
-  type: 'full' | 'incremental' | 'differential';
-  description?: string;
-  tags?: string[];
-  retentionDays?: number;
-}
-
-export interface BackupEntry {
-  id: string;
-  database: string;
-  type: 'full' | 'incremental' | 'differential';
-  sizeBytes: number;
-  createdAt: Date;
-  status: BackupStatus;
-  description?: string;
-  tags: string[];
-}
-
-export type BackupStatus = 'pending' | 'running' | 'completed' | 'failed' | 'expired';
-
-export interface BackupFilter {
-  database?: string;
-  type?: 'full' | 'incremental' | 'differential';
-  status?: BackupStatus;
-  createdAfter?: Date;
-  createdBefore?: Date;
-}
-
+/**
+ * Point-in-Time Recovery manager.
+ */
 export interface IPITRManager {
-  /** Create a restore point in time */
-  createRestorePoint(timestamp: Date): Promise<string>;
-  /** Restore database to a specific point in time */
-  restoreToPointInTime(targetTimestamp: Date, targetDatabase?: string): Promise<void>;
-  /** List available PITR restore points */
-  listRestorePoints(): Promise<RestorePoint[]>;
-  /** Get recovery window details */
-  getRecoveryWindow(): Promise<{ earliest: Date; latest: Date }>;
+  /**
+   * Get the current WAL position.
+   */
+  getCurrentLSN(): Promise<string>;
+
+  /**
+   * Get the current WAL position as a timestamp (ISO-8601).
+   */
+  getCurrentTimestamp(): Promise<string>;
+
+  /**
+   * Archive the current WAL segment.
+   */
+  archiveCurrentWal(): Promise<void>;
+
+  /**
+   * Get the recovery point closest to the target time.
+   */
+  resolveTarget(target: PITRTarget): Promise<{
+    snapshotId: string;
+    walEndLsn: string;
+    approxTime: string;
+  }>;
+
+  /**
+   * Check if PITR is enabled and operational.
+   */
+  isEnabled(): boolean;
 }
 
-export interface RestorePoint {
-  id: string;
-  timestamp: Date;
-  database: string;
-  type: 'full' | 'log';
-  sizeBytes: number;
-}
-
+/**
+ * Storage backend for backup data.
+ */
 export interface IStorageBackend {
-  /** Upload backup data */
-  upload(backupId: string, data: Buffer, metadata: Record<string, unknown>): Promise<void>;
-  /** Download backup data */
-  download(backupId: string): Promise<Buffer>;
-  /** Check if backup exists */
-  exists(backupId: string): Promise<boolean>;
-  /** Delete backup data */
-  delete(backupId: string): Promise<void>;
-  /** Get storage usage statistics */
-  getUsage(): Promise<StorageUsage>;
+  /** Unique storage backend identifier. */
+  readonly name: string;
+
+  /** Upload a file to the storage backend. */
+  upload(sourcePath: string, destKey: string): Promise<void>;
+
+  /** Download a file from the storage backend. */
+  download(sourceKey: string, destPath: string): Promise<void>;
+
+  /** List objects with the given prefix. */
+  list(prefix: string): Promise<Array<{ key: string; size: number; lastModified: string }>>;
+
+  /** Delete an object. */
+  delete(key: string): Promise<void>;
+
+  /** Check if the backend is accessible. */
+  health(): Promise<{ ok: boolean; message?: string }>;
+
+  /** Get total storage usage in bytes. */
+  getUsageBytes(): Promise<number>;
 }
 
-export interface StorageUsage {
-  totalBytes: number;
-  usedBytes: number;
-  freeBytes: number;
-  backupCount: number;
-}
-
-// ── Sprint 1.2 New Interfaces ──
-
-export interface IBackupScheduleConfig {
-  /** Whether the scheduled backup is enabled */
-  enabled: boolean;
-  /** Interval between scheduled backups in milliseconds */
-  intervalMs: number;
-  /** Number of backups to retain (FIFO rotation) */
-  retentionCount: number;
-}
-
-export interface IBackupScheduler {
-  /** Start the backup scheduler */
-  start(): Promise<void>;
-  /** Stop the backup scheduler */
-  stop(): Promise<void>;
-  /** Get the timestamp of the next scheduled backup */
-  getNextScheduled(): Promise<Date | null>;
-  /** Trigger an immediate backup outside the normal schedule */
-  triggerNow(): Promise<string>;
-  /** Callback invoked when a scheduled backup completes and is ready */
-  onBackupReady(callback: (backupId: string) => void): void;
-}
-
-export interface IBackupManifest {
-  /** Unique backup identifier */
-  id: string;
-  /** Backup metadata */
-  metadata: BackupMetadata;
-  /** Current backup status */
-  status: BackupStatus;
-  /** Backup size in bytes */
-  sizeBytes: number;
-  /** Timestamp when the backup was created */
-  createdAt: Date;
-}
-
-export interface IBackupRetentionRule {
-  /** Maximum number of backups to retain */
-  maxCount: number;
-  /** Maximum age of a backup in days before it can be removed */
-  maxAgeDays: number;
-  /** Minimum interval in hours between retained backups */
-  minInterval: number;
-}
-
+/**
+ * Backup retention policy.
+ */
 export interface IBackupRetentionPolicy {
-  /** Evaluate a list of backup manifests and return those eligible for deletion */
-  evaluate(manifests: IBackupManifest[]): Promise<IBackupManifest[]>;
-  /** Get the current retention policy configuration */
-  getPolicy(): Promise<IBackupRetentionRule[]>;
-  /** Set a new retention policy configuration */
-  setPolicy(rules: IBackupRetentionRule[]): Promise<void>;
+  /**
+   * Evaluate which snapshots to keep/prune given the current inventory.
+   * Returns the snapshot IDs to delete.
+   */
+  evaluate(snapshots: BackupMetadata[]): BackupMetadata[];
+
+  /**
+   * Get the policy configuration.
+   */
+  getConfig(): RetentionPolicy;
+
+  /**
+   * Update the policy configuration at runtime.
+   */
+  updateConfig(config: Partial<RetentionPolicy>): void;
 }

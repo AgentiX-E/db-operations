@@ -5,3 +5,6 @@ export type {
   AuditQueryFilter,
   ExportOptions,
 } from './interfaces/index.js';
+
+export { InMemoryAuditStore } from './impl/InMemoryAuditStore.js';
+export { JsonAuditExporter } from './impl/JsonAuditExporter.js';

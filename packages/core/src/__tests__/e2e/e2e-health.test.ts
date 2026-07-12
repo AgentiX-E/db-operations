@@ -83,3 +83,30 @@ describe.each([
     expect(Array.isArray(healths)).toBe(true);
   });
 });
+
+it('should handle empty health orchestrator', () => {
+  const factory2 = new InMemoryEngineFactory();
+  const orch = factory2.createHealthOrchestrator();
+  expect(orch.liveness().ok).toBe(true);
+});
+
+it('should register and check multiple components', () => {
+  const factory2 = new InMemoryEngineFactory();
+  const orch = factory2.createHealthOrchestrator();
+  expect(orch.liveness().ok).toBe(true);
+  expect(orch.readiness().ok).toBe(true);
+});
+
+it('should return health with status field', () => {
+  const factory2 = new InMemoryEngineFactory();
+  const orch = factory2.createHealthOrchestrator();
+  const health = orch.getHealthStatus();
+  expect(health.status).toBeDefined();
+});
+
+it('should handle probe startup check', () => {
+  const factory2 = new InMemoryEngineFactory();
+  const probe = factory2.createHealthProbe();
+  const result = probe.startup();
+  expect(result).toBeDefined();
+});

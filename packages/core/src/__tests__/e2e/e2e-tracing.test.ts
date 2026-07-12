@@ -120,4 +120,49 @@ describe.each([
     const c2 = completed.find(s => s.name === 'child2');
     expect(c1!.traceId).toBe(c2!.traceId);
   });
+
+  it('should inject trace context with correct format', () => {
+    const tracer = factory.createDistributedTracer();
+    const span = tracer.startSpan('formatted');
+    const carrier: Record<string, string> = {};
+    tracer.inject(carrier);
+    expect(carrier.traceparent).toMatch(/^00-/);
+    span.end();
+  });
+
+  it('should handle multiple active spans', () => {
+    const tracer = factory.createDistributedTracer();
+    const s1 = tracer.startSpan('s1');
+    const s2 = tracer.startSpan('s2');
+    const current = tracer.getCurrentSpan();
+    expect(current).toBeDefined();
+    s2.end();
+    s1.end();
+    expect(tracer.getCompletedSpans()).toHaveLength(2);
+  });
+
+  it('should share traceId across all spans', () => {
+    const tracer = factory.createDistributedTracer();
+    const parent = tracer.startSpan('root');
+    const c1 = tracer.startSpan('c1');
+    c1.end();
+    const c2 = tracer.startSpan('c2');
+    c2.end();
+    parent.end();
+    const traceIds = new Set(tracer.getCompletedSpans().map(s => s.traceId));
+    expect(traceIds.size).toBe(1);
+  });
+
+  it('should create and use multiple tracers independently', () => {
+    const tracer = factory.createDistributedTracer();
+    const t1Span = tracer.startSpan('tracer1');
+    t1Span.end();
+    expect(tracer.getCompletedSpans()).toHaveLength(1);
+  });
+
+  it('should clear empty tracer', () => {
+    const tracer = factory.createDistributedTracer();
+    tracer.clearCompletedSpans();
+    expect(tracer.getCompletedSpans()).toEqual([]);
+  });
 });

@@ -97,4 +97,31 @@ describe.each([
     const result = await maint.reindex({ target: '*' });
     expect(result.success).toBe(true);
   });
+
+  it('should count audit entries with filter', async () => {
+    const audit = factory.createAuditStore();
+    const c1 = await audit.count({ actor: 'nobody' });
+    expect(typeof c1).toBe('number');
+  });
+
+  it('should query audit with limit', async () => {
+    const audit = factory.createAuditStore();
+    await audit.write({ operation: 'OP1', actor: 'a', resource: 'r', result: 'success' });
+    await audit.write({ operation: 'OP2', actor: 'a', resource: 'r', result: 'success' });
+    const entries = await audit.query({ limit: 1 });
+    expect(entries.length).toBeLessThanOrEqual(1);
+  });
+
+  it('should prune with zero result for recent dates', async () => {
+    const audit = factory.createAuditStore();
+    const future = new Date('2099-01-01');
+    const pruned = await audit.pruneOlderThan(future);
+    expect(pruned).toBe(0);
+  });
+
+  it('should handle audit query with unknown actor', async () => {
+    const audit = factory.createAuditStore();
+    const entries = await audit.query({ actor: 'unknown' });
+    expect(Array.isArray(entries)).toBe(true);
+  });
 });

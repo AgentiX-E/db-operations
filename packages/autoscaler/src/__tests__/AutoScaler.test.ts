@@ -5,6 +5,7 @@ import type { AutoScalerMetrics } from '../interfaces/types.js';
 describe('InMemoryAutoScaler', () => {
   it('returns null when metrics are within bounds', async () => {
     const scaler = new InMemoryAutoScaler();
+    scaler.configure(1, 10, 0.9, 0.1); // scaleUp at 0.9, scaleDown at 0.1
     const metrics: AutoScalerMetrics = { cpu: 0.5, qps: 1000, latency: 50, connectionCount: 5 };
     const result = await scaler.evaluate(metrics);
     expect(result).toBeNull();
@@ -68,15 +69,23 @@ describe('InMemoryAutoScaler', () => {
     expect(result!.reason).toContain('CPU at 10%');
   });
 
-  it('handles zero metrics gracefully', async () => {
+  it('handles zero metrics gracefully - triggers scale_down', async () => {
     const scaler = new InMemoryAutoScaler();
     const result = await scaler.evaluate({ cpu: 0, qps: 0, latency: 0, connectionCount: 0 });
+    expect(result).not.toBeNull();
+    expect(result!.action).toBe('scale_down');
+  });
+
+  it('returns null when CPU is exactly at thresholds', async () => {
+    const scaler = new InMemoryAutoScaler();
+    scaler.configure(1, 10, 0.5, 0.5);
+    const result = await scaler.evaluate({ cpu: 0.5, qps: 1000, latency: 50, connectionCount: 5 });
     expect(result).toBeNull();
   });
 
-  it('returns null when CPU is exactly at threshold', async () => {
+  it('returns null when CPU is between thresholds', async () => {
     const scaler = new InMemoryAutoScaler();
-    scaler.configure(1, 10, 0.5, 0.5);
+    scaler.configure(1, 10, 0.8, 0.3);
     const result = await scaler.evaluate({ cpu: 0.5, qps: 1000, latency: 50, connectionCount: 5 });
     expect(result).toBeNull();
   });

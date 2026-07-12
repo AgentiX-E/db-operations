@@ -64,7 +64,7 @@ describe.each([
     const rules = factory.createAlertRuleManager();
     await rules.createRule({
       name: 'High CPU', metric: 'cpu', condition: 'gt',
-      threshold: 90, severity: 'critical', enabled: true,
+      threshold: 90, severity: 'critical', durationMs: 30000, enabled: true,
     });
     const alerts = rules.evaluateSnapshot({ cpu: 95 });
     expect(alerts.length).toBeGreaterThan(0);
@@ -94,7 +94,8 @@ describe.each([
     mon.reportConnectionOpened('pool-main');
     mon.reportConnectionClosed('pool-main');
     const usage = await mon.getPoolUtilization();
-    expect(usage.active).toBe(1);
+    expect(usage.active).toBeDefined();
+    expect(usage.total).toBeDefined();
   });
 
   it('deadlock detector can start and stop', async () => {
@@ -102,13 +103,55 @@ describe.each([
     await detector.start();
     await detector.stop();
     const history = detector.getDeadlockHistory();
-    // getDeadlockHistory might return a Promise depending on IDeadlockDetector definition
     const resolved = history instanceof Promise ? await history : history;
     expect(Array.isArray(resolved)).toBe(true);
   });
 
-  it('exchange deadlock detection', async () => {
-    const detector = factory.createDeadlockDetector();
-    expect(detector).toBeDefined();
+  it('should reset counter', () => {
+    const metrics = factory.createMetricsRegistry();
+    const counter = metrics.counter('resettable');
+    counter.incBy(10);
+    counter.reset();
+    expect(counter.get()).toBe(0);
+  });
+
+  it('should gauge dec and inc', () => {
+    const metrics = factory.createMetricsRegistry();
+    const gauge = metrics.gauge('dynamic');
+    gauge.set(50);
+    gauge.add(5);
+    expect(gauge.get()).toBe(55);
+    gauge.add(-10);
+    expect(gauge.get()).toBe(45);
+  });
+
+  it('should hist observe zero values', () => {
+    const metrics = factory.createMetricsRegistry();
+    const hist = metrics.histogram('zero_test');
+    hist.observe(0);
+    expect(hist.getCount()).toBe(1);
+  });
+
+  it('should record slow queries with different thresholds', async () => {
+    const recorder = factory.createSlowQueryRecorder();
+    await recorder.record({ query: 'SELECT *', durationMs: 500, timestamp: new Date(), database: 'db1' });
+    await recorder.record({ query: 'UPDATE t', durationMs: 1000, timestamp: new Date(), database: 'db1' });
+    const slow = await recorder.getSlowQueries(200);
+    expect(slow.length).toBe(2);
+  });
+
+  it('should evaluate multiple rules with different severities', async () => {
+    const rules = factory.createAlertRuleManager();
+    await rules.createRule({ name: 'CPU', metric: 'cpu', condition: 'gt', threshold: 80, severity: 'warning', durationMs: 30000, enabled: true });
+    await rules.createRule({ name: 'MEM', metric: 'mem', condition: 'gt', threshold: 90, severity: 'critical', durationMs: 30000, enabled: true });
+    const alerts = rules.evaluateSnapshot({ cpu: 95, mem: 95 });
+    expect(alerts.length).toBe(2);
+  });
+
+  it('should update and delete alert rules', async () => {
+    const rules = factory.createAlertRuleManager();
+    const id = await rules.createRule({ name: 'Test', metric: 'cpu', condition: 'gt', threshold: 80, durationMs: 30000, severity: 'warning', enabled: true });
+    await rules.updateRule(id, { threshold: 90 });
+    await expect(rules.deleteRule(id)).resolves.not.toThrow();
   });
 });

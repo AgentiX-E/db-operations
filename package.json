@@ -5,6 +5,9 @@
   "workspaces": [
     "packages/*"
   ],
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "build": "for pkg in core auth audit backup health logger maintenance metrics monitor observability security; do tsc -p \"packages/$pkg/tsconfig.json\"; done",
     "build:clean": "rm -rf packages/*/dist",

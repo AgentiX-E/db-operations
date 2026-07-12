@@ -464,9 +464,9 @@ describe('InMemorySecurityCompliance', () => {
     expect(score).toBeLessThanOrEqual(100);
   });
 
-  it('getScore returns 0 for empty checks', () => {
+  it('getScore returns 100 for empty checks (no violations)', () => {
     const comp = new InMemorySecurityCompliance();
-    expect(comp.getScore()).toBe(0);
+    expect(comp.getScore()).toBe(100);
   });
 
   it('getScore with all PASS returns 100', () => {

@@ -25,7 +25,7 @@ export class InMemorySecurityCompliance implements ISecurityCompliance {
   }
 
   getScore(): number {
-    if (this._checks.length === 0) return 0;
+    if (this._checks.length === 0) return 100; // No violations = perfect score
     let sum = 0;
     for (const check of this._checks) {
       if (check.severity === 'PASS') sum += 1;

@@ -19,7 +19,9 @@
     "format": "prettier --write 'packages/*/src/**/*.ts'",
     "changeset": "changeset",
     "version": "changeset version",
-    "release": "npm run build && changeset publish"
+    "release": "npm run build && changeset publish",
+    "bench": "tsx bench/run-all.ts",
+    "bench:ycsb": "tsx bench/ycsb/run-ycsb.ts"
   },
   "devDependencies": {
     "@types/node": "^26.1.0",

@@ -169,3 +169,32 @@ export interface IResourceQuotaManager {
   /** Get current resource usage for a given role */
   getUsage(roleId: string): Promise<{ cpu: number; memoryMB: number; connections: number; queryRate: number }>;
 }
+export interface ResourceUsageSnapshot {
+  /** Memory usage in bytes. */
+  memoryBytes: number;
+  /** Memory limit in bytes (0 = unlimited). */
+  memoryLimitBytes: number;
+  /** Memory utilization ratio. */
+  memoryUtilization: number;
+  /** Current queries per second rate. */
+  queriesPerSec: number;
+  /** Maximum allowed queries per second. */
+  maxQueriesPerSec: number;
+  /** CPU usage percentage (0-100). */
+  cpuPercent: number;
+  /** Connection pool state. */
+  connectionPool: {
+    total: number;
+    active: number;
+    idle: number;
+    waiting: number;
+    maxSize: number;
+    utilization: number;
+  };
+  /** Disk used in bytes. */
+  diskUsedBytes: number;
+  /** Disk free in bytes. */
+  diskFreeBytes: number;
+  /** Snapshot timestamp in ms. */
+  timestamp?: number;
+}

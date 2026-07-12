@@ -1,14 +1,19 @@
 {
   "name": "@agentix-e/db-operations",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "workspaces": [
     "packages/*"
   ],
   "scripts": {
-    "build": "tsc -b",
+    "build": "for pkg in core auth audit backup health logger maintenance metrics monitor observability security; do tsc -p \"packages/$pkg/tsconfig.json\"; done",
+    "build:clean": "rm -rf packages/*/dist",
+    "build:watch": "tsc -b --watch",
+    "clean": "rm -rf packages/*/dist node_modules",
     "test": "vitest run",
-    "clean": "rm -rf packages/*/dist node_modules"
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "format": "prettier --write 'packages/*/src/**/*.ts'"
   },
   "devDependencies": {
     "@types/node": "^26.1.0",

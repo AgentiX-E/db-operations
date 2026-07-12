@@ -14,7 +14,7 @@ function nanoId(): string {
 export class InMemoryDistributedTracer implements IDistributedTracer {
   private spans: Span[] = [];
   private active = new Map<string, Span>();
-  private currentSpanId: string | null = null;
+  private currentSpanId: string | undefined;
 
   startSpan(
     name: string,
@@ -88,8 +88,8 @@ export class InMemoryDistributedTracer implements IDistributedTracer {
     return { traceId: parts[1], parentSpanId: parts[2] };
   }
 
-  private determineReturnParent(spanId: string): string | null {
+  private determineReturnParent(spanId: string): string | undefined {
     const span = this.spans.find((s) => s.spanId === spanId);
-    return span?.parentSpanId ?? null;
+    return span?.parentSpanId;
   }
 }

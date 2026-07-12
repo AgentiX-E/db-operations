@@ -3,6 +3,10 @@
   "version": "0.1.0",
   "description": "Database maintenance operations (VACUUM, ANALYZE, REINDEX) abstraction for db-operations",
   "type": "module",
+  "private": false,
+  "publishConfig": {
+    "access": "public"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -12,13 +16,19 @@
       "default": "./dist/index.js"
     }
   },
+  "files": [
+    "dist"
+  ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "test": "vitest run",
-    "test:watch": "vitest"
+    "build": "tsc",
+    "clean": "rm -rf dist"
   },
   "dependencies": {
     "@agentix-e/db-operations-core": "^0.1.0"
+  },
+  "peerDependencies": {},
+  "engines": {
+    "node": ">=18"
   },
   "license": "MIT"
 }

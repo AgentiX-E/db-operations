@@ -12,12 +12,6 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
-    "isolatedModules": true,
-    "composite": true
-  },
-  "references": [
-    { "path": "packages/auth" },
-    { "path": "packages/monitor" },
-    { "path": "packages/backup" }
-  ]
+    "isolatedModules": true
+  }
 }

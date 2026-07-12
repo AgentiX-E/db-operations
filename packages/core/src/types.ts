@@ -491,3 +491,16 @@ export interface MigrationPlan {
   /** Namespace (e.g., 'sqlvec', 'graphvec', or per-engine). */
   namespace: string;
 }
+// ── Backwards-compatible aliases ──
+/** @deprecated Use {@link BackupMetadata} instead. */
+export type BackupSnapshot = BackupMetadata;
+/** @deprecated Use {@link ResourceUsageSnapshot} instead. */
+export type ResourceUsage = ResourceUsageSnapshot;
+
+/** @deprecated Move to @agentix-e/db-operations-health/types. */
+export interface ComponentRegistrationOptions {
+  /** Optional metadata key-value pairs. */
+  metadata?: Record<string, string>;
+  /** Whether the component is critical (failure degrades overall status). */
+  critical?: boolean;
+}

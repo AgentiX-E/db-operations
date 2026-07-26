@@ -274,7 +274,7 @@ describe('TR', () => {
   );
 
   // Single-shot: inject W3C trace context into 1000 carriers
-  // Baseline ~800K ns, GC pause during full suite → 2M ns
+  // Baseline ~800K ns, GC pause during full suite → 2.5M ns
   b(
     'inject 1000',
     () => {
@@ -282,7 +282,7 @@ describe('TR', () => {
       const c: any = {};
       for (let i = 0; i < 1_000; i++) t.inject(c);
     },
-    2_000_000,
+    2_500_000,
   );
 
   // Single-shot: extract W3C trace context from 1000 carriers

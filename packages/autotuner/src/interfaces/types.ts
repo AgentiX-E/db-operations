@@ -2,7 +2,7 @@ export interface AutoScalerMetrics {
   cpu: number;
   qps: number;
   latency: number;
-  connectionCount: number;
+  connectionCount?: number;
 }
 
 export interface TuningRecommendation {

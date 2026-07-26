@@ -19,6 +19,58 @@ import type {
   SnapshotType,
 } from '@agentix-e/db-operations-core/types';
 
+/** Single backup entry returned in listings. */
+export type BackupEntry = {
+  id: string;
+  database: string;
+  type: 'full' | 'incremental' | 'diff';
+  sizeBytes: number;
+  createdAt: Date;
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'expired';
+  tags?: string[];
+};
+
+/** Point-in-time restore point. */
+export type RestorePoint = {
+  id: string;
+  timestamp: Date;
+  database: string;
+  type: 'log' | 'snapshot';
+  sizeBytes: number;
+};
+
+/** Backup schedule configuration. */
+export type IBackupScheduleConfig = {
+  enabled: boolean;
+  intervalMs: number;
+  retentionCount: number;
+};
+
+/** Backup scheduler — manages recurring backup cycles. */
+export type IBackupScheduler = {
+  start(): Promise<void>;
+  stop(): Promise<void>;
+  getNextScheduled(): Promise<Date | null>;
+  triggerNow(): Promise<string>;
+  onBackupReady(callback: (backupId: string) => void): void;
+};
+
+/** Backup manifest — metadata for a stored backup. */
+export type IBackupManifest = {
+  id: string;
+  metadata: { database: string; type: string };
+  status: string;
+  sizeBytes: number;
+  createdAt: Date;
+};
+
+/** Individual retention rule. */
+export type IBackupRetentionRule = {
+  maxCount: number;
+  maxAgeDays: number;
+  minInterval: number;
+};
+
 /** Options for creating a backup. */
 export interface CreateBackupOptions {
   /** Snapshot type. */

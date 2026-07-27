@@ -1,0 +1,93 @@
+name: Quality (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      node_version:
+        type: string
+        default: '22'
+      coverage_threshold:
+        type: number
+        default: 95
+      test_flags:
+        type: string
+        default: ''
+
+jobs:
+  lint:
+    name: Lint & Format
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run format:check
+        continue-on-error: true
+      - run: npx tsc --noEmit
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run build
+
+  test:
+    name: Test (${{ matrix.shard }})
+    needs: [lint, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ['1/4', '2/4', '3/4', '4/4']
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run build
+      - run: npm run test -- --shard=${{ matrix.shard }} ${{ inputs.test_flags }}
+
+  coverage:
+    name: Coverage
+    needs: [lint, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run build
+      - run: npm run coverage
+      - name: Coverage threshold check
+        run: |
+          COVERAGE=$(node -e "const c=require('./coverage/coverage-summary.json');console.log(c.total.lines.pct)")
+          echo "Line coverage: ${COVERAGE}%"
+          echo "Threshold: ${{ inputs.coverage_threshold }}%"
+          if (( $(echo "$COVERAGE < ${{ inputs.coverage_threshold }}" | bc -l) )); then
+            echo "❌ Coverage ${COVERAGE}% below threshold ${{ inputs.coverage_threshold }}%"
+            exit 1
+          fi
+          echo "✅ Coverage threshold met"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: coverage-report
+          path: coverage/
+          retention-days: 14

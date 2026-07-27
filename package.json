@@ -22,7 +22,10 @@
     "release": "npm run build && changeset publish",
     "bench": "tsx bench/run-all.ts",
     "bench:ycsb": "tsx bench/ycsb/run-ycsb.ts",
-    "docs": "typedoc"
+    "docs": "typedoc",
+    "format:check": "prettier --check \"packages/*/src/**/*.ts\"",
+    "coverage": "vitest run --coverage",
+    "ci": "npx tsc --noEmit && npm run test && npm run coverage"
   },
   "devDependencies": {
     "@types/node": "^26.1.0",

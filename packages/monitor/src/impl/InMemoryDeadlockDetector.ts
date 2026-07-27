@@ -173,18 +173,18 @@ export class InMemoryDeadlockDetector {
                 timestamp: new Date().toISOString(),
                 transactions: [...cycle],
                 resources: [...new Set(resourceList)],
-                resolvedBy: victim,
+                resolvedBy: victim!,
               };
               events.push(event);
               this._deadlocks.push(event);
 
               // Remove victim from wait-for graph (resolve deadlock)
-              this._waitFor.delete(victim);
-              graph.delete(victim);
+              this._waitFor.delete(victim!);
+              graph.delete(victim!);
 
               this._notifyCallbacks({
                 cycle: [...cycle],
-                victimTransaction: victim,
+                victimTransaction: victim!,
                 detectedAt: new Date(event.timestamp),
               });
 

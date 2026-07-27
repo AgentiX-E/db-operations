@@ -123,7 +123,7 @@ export class FileAuditStore implements IAuditStore {
       for (const f of files) {
         const match = f.match(new RegExp(`^${this.filePrefix}-${datePrefix}-(\\d{4})\\.ndjson`));
         if (match) {
-          maxSeq = Math.max(maxSeq, parseInt(match[1], 10));
+          maxSeq = Math.max(maxSeq, parseInt(match[1]!, 10));
         }
       }
     } catch { /* ignore */ }
@@ -140,7 +140,7 @@ export class FileAuditStore implements IAuditStore {
       for (const f of files) {
         const match = f.match(new RegExp(`^${this.filePrefix}-(\\d{8})-(\\d{4})\\.ndjson$`));
         if (match) {
-          const seq = parseInt(match[2], 10);
+          const seq = parseInt(match[2]!, 10);
           if (seq > maxSeq) {
             maxSeq = seq;
             active = join(this.dataDir, f);

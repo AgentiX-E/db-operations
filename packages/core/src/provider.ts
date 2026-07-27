@@ -187,7 +187,7 @@ export class ProviderRegistry {
       throw new ProviderNotFoundError(iface.namespace);
     }
     // Highest priority is first (sorted descending).
-    return entries[0].instance as T;
+    return entries[0]!.instance as T;
   }
 
   /**

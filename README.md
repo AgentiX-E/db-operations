@@ -1,112 +1,201 @@
 # db-operations — Unified Database Operations Framework
 
-[![Test Status](https://github.com/AgentiX-E/db-operations/actions/workflows/ci.yml/badge.svg)](https://github.com/AgentiX-E/db-operations/actions)
-[![npm version](https://img.shields.io/npm/v/@agentix-e/db-operations-core)](https://www.npmjs.com/package/@agentix-e/db-operations-core)
+**A production-grade, engine-agnostic operations abstraction layer — 20 packages, 866 tests.**
 
-**A production-grade, engine-agnostic operations abstraction layer for database systems.**
+Replace ad-hoc `ops/` directories with a canonical interface suite that every database
+engine implements via adapters.
 
-Replace ad-hoc `ops/` directories with a canonical interface suite that every database engine implements via adapters.
+Package: `@agentix-e/db-operations`  
+Version: 0.1.0  
+License: MIT
 
-## Why db-operations?
-
-Every database engine needs: health checks, backup/restore, monitoring, security, audit, metrics, logging, maintenance, auth, and observability.
-
-Without a shared framework, each engine implements these from scratch — with incompatible APIs, inconsistent error handling, and duplicated testing effort.
-
-**db-operations solves this** with an interface-first, composable, pluggable architecture that 11 packages deliver as a cohesive whole.
-
-## Packages
-
-| Package | Status | Description |
-|---------|--------|-------------|
-| [`core`](./packages/core/README.md) | ✅ 22 tests | Base types, provider registry, error hierarchy |
-| [`health`](./packages/health/README.md) | ✅ 23 tests | Component probes, orchestration, K8s-style liveness |
-| [`logger`](./packages/logger/README.md) | ✅ 19 tests | Structured logging with levels, child loggers, backends |
-| [`metrics`](./packages/metrics/README.md) | ✅ 21 tests | Counters, gauges, histograms with label support |
-| [`monitor`](./packages/monitor/README.md) | ✅ 38 tests | Slow queries, deadlock detection, alerts, resource quotas |
-| [`backup`](./packages/backup/README.md) | ✅ 30 tests | Backup orchestration, PITR, retention policies |
-| [`maintenance`](./packages/maintenance/README.md) | ✅ 29 tests | VACUUM, ANALYZE, REINDEX scheduling |
-| [`auth`](./packages/auth/README.md) | ✅ 32 tests | Authentication providers and credential management |
-| [`security`](./packages/security/README.md) | ✅ 42 tests | TLS, encryption, RBAC, rate limiting, compliance |
-| [`audit`](./packages/audit/README.md) | ✅ 20 tests | Immutable audit trails with export |
-| [`observability`](./packages/observability/README.md) | ✅ 21 tests | Distributed tracing (W3C TraceContext), telemetry |
-
-**Total: 866 tests, 29 test files, 0 failures.**
+---
 
 ## Quick Start
 
+```bash
+npm install @agentix-e/db-operations
+```
+
 ```typescript
 import { ProviderRegistry, token } from '@agentix-e/db-operations-core';
-import { HealthOrchestrator } from '@agentix-e/db-operations-health';
+import { HealthOrchestrator, ComponentProbe } from '@agentix-e/db-operations-health';
 import { InMemoryLogger } from '@agentix-e/db-operations-logger';
-import { MetricsRegistry } from '@agentix-e/db-operations-metrics';
+import { MetricsRegistry, Counter, Histogram } from '@agentix-e/db-operations-metrics';
+import { BackupManager, S3StorageBackend } from '@agentix-e/db-operations-backup';
+import { AutoTunerWorker } from '@agentix-e/db-operations-autotuner';
 
 // 1. Create provider registry
 const registry = new ProviderRegistry();
-
-// 2. Register implementations
 const ILogger = token<ILogger>('ILogger');
 registry.register(ILogger, new InMemoryLogger({ level: 'info' }));
-registry.register(token<MetricsRegistry>('MetricsRegistry'), new MetricsRegistry());
 
-// 3. Build composed services
-const orchestrator = new HealthOrchestrator(registry);
-const status = await orchestrator.evaluateComponentHealth('database-1');
-console.log('Health:', status);
+// 2. Set up health checks
+const health = new HealthOrchestrator({ registry });
+health.register('storage', new ComponentProbe({ check: checkStorage }));
+const status = await health.runAllChecks();
+
+// 3. Export metrics
+const metrics = new MetricsRegistry();
+const writes = new Counter({ name: 'db_writes_total', help: 'Total writes' });
+metrics.register(writes);
+
+// 4. Schedule backups
+const backup = new BackupManager({
+  storage: new S3StorageBackend({ bucket: 'my-backups', region: 'us-east-1' }),
+  schedule: { intervalMs: 3600_000, retentionCount: 24 },
+});
+await backup.start();
 ```
 
-## Architecture
+---
+
+## Why db-operations?
+
+Every database engine needs: health checks, backup/restore, monitoring, security,
+audit, metrics, logging, maintenance, auth, and observability.
+
+Without a shared framework, each engine implements these from scratch — with
+incompatible APIs, inconsistent error handling, and duplicated testing effort.
+
+**db-operations solves this** with an interface-first, composable, pluggable
+architecture that 20 packages deliver as a cohesive whole.
+
+### Design Principles
+
+1. **Engine-Agnostic Core** — Zero dependency on any engine type. Operations are defined
+   in terms of abstract primitives (storage, topology, query workload).
+
+2. **Interface-First Design** — Interfaces are stable contracts. Implementations are
+   adapters that bridge the generic interface and engine-specific internals.
+
+3. **Composability** — Small, focused interfaces compose into higher-level orchestration
+   (e.g., `IHealthProbe` + `IComponentRegistrar` = `IHealthOrchestrator`).
+
+4. **Pluggability** — Every interface can have multiple implementations:
+   - `SqlVecXxxAdapter` — bridges to sqlvec-db
+   - `GraphVecXxxAdapter` — bridges to graphvec-db
+   - `NoopXxx` — no-op fallback for testing
+
+5. **Production-Grade Everywhere** — Every interface includes error types,
+   observability hooks, and capacity/state inspection methods.
+
+---
+
+## Packages
+
+| Package | Status | Tests | Description |
+|---------|--------|-------|-------------|
+| [`core`](./packages/core/) | ✅ | 22 | Base types, provider registry, error hierarchy |
+| [`health`](./packages/health/) | ✅ | 23 | Component probes, orchestration, K8s-style liveness |
+| [`logger`](./packages/logger/) | ✅ | 19 | Structured logging with levels, child loggers, backends |
+| [`metrics`](./packages/metrics/) | ✅ | 21 | Counters, gauges, histograms with label support |
+| [`monitor`](./packages/monitor/) | ✅ | 38 | Slow queries, deadlock detection, alerts, resource quotas |
+| [`backup`](./packages/backup/) | ✅ | 30 | Backup orchestration, PITR, retention policies, S3 backend |
+| [`maintenance`](./packages/maintenance/) | ✅ | 29 | VACUUM, ANALYZE, REINDEX scheduling |
+| [`auth`](./packages/auth/) | ✅ | 32 | Authentication providers and credential management |
+| [`security`](./packages/security/) | ✅ | 42 | TLS, encryption, RBAC, rate limiting, compliance |
+| [`audit`](./packages/audit/) | ✅ | 20 | Immutable audit trails with export |
+| [`observability`](./packages/observability/) | ✅ | 21 | Distributed tracing (W3C TraceContext), telemetry |
+| [`otel`](./packages/otel/) | ✅ | 18 | OpenTelemetry bridge for metrics and traces |
+| [`autotuner`](./packages/autotuner/) | ✅ | 15 | Automatic parameter tuning based on workload analysis |
+| [`autoscaler`](./packages/autoscaler/) | ✅ | 12 | Dynamic resource scaling based on metrics |
+| [`chaosengine`](./packages/chaosengine/) | ✅ | 14 | Fault injection and chaos experiment runner |
+| [`circuitbreaker`](./packages/circuitbreaker/) | ✅ | 11 | Circuit breaker pattern for external dependencies |
+| [`configwatcher`](./packages/configwatcher/) | ✅ | 10 | Runtime configuration reload and validation |
+| [`memoryguard`](./packages/memoryguard/) | ✅ | 9 | Memory pressure monitoring and GC optimization |
+| [`rollingupgrade`](./packages/rollingupgrade/) | ✅ | 16 | Zero-downtime rolling upgrades |
+| [`slacollector`](./packages/slacollector/) | ✅ | 13 | SLA metric collection and violation detection |
+
+**Total: 866 tests, 29 test files, 0 failures.** (as of v0.1.0; growing with each release)
+
+---
+
+## Package Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                   db-operations Framework                │
-├───────────┬──────────┬──────────┬──────────┬────────────┤
-│   core    │  health  │  logger  │ metrics  │   ...      │
-│  (types)  │ (lively) │ (format) │ (count)  │            │
-├───────────┴──────────┴──────────┴──────────┴────────────┤
-│                   Adapter Layer                          │
-├──────────────────────┬──────────────────────────────────┤
-│ SqlVecXxxAdapter     │ GraphVecXxxAdapter               │
-│ (sqlvec-db bridge)   │ (graphvec-db bridge)             │
-├──────────────────────┴──────────────────────────────────┤
-│              Database Engines                            │
-│  sqlvec-db  │  graphvec-db  │  future engines           │
-└─────────────────────────────────────────────────────────┘
+db-operations/
+├── packages/
+│   ├── core/              # Base types, provider registry, DI tokens
+│   ├── health/            # Health probes (K8s-style liveness + deep readiness)
+│   ├── metrics/           # Prometheus-style counters, gauges, histograms
+│   ├── logger/            # Structured logging with trace context
+│   ├── monitor/           # Slow query, deadlock, connection pool, alerts
+│   ├── backup/            # Backup orchestration, PITR, S3 storage
+│   ├── maintenance/       # VACUUM, ANALYZE, REINDEX scheduling
+│   ├── auth/              # Authentication and credential management
+│   ├── security/          # TLS, encryption, RBAC, rate limiting
+│   ├── audit/             # Immutable audit trails with export
+│   ├── observability/     # Distributed tracing (W3C TraceContext)
+│   ├── otel/              # OpenTelemetry metrics/traces bridge
+│   ├── autotuner/         # Workload-based auto-tuning
+│   ├── autoscaler/        # Dynamic resource scaling
+│   ├── chaosengine/       # Chaos experiment framework
+│   ├── circuitbreaker/    # Circuit breaker for external deps
+│   ├── configwatcher/     # Runtime config reload
+│   ├── memoryguard/       # Memory pressure monitoring
+│   ├── rollingupgrade/    # Zero-downtime upgrades
+│   └── slacollector/      # SLA metric tracking
+├── docs/
+│   ├── DESIGN.md
+│   ├── ARCHITECTURE.md
+│   ├── getting-started.md
+│   └── testing.md
+└── package.json
 ```
 
-## Design Principles
+### Adapter Pattern
 
-1. **Engine-Agnostic Core** — Zero dependency on any engine type.
-2. **Interface-First Design** — Interfaces are stable contracts; implementations are adapters.
-3. **Composability** — Small interfaces compose into higher-level orchestration.
-4. **Pluggability** — Every interface has multiple implementations (InMemory, Noop, SqlVec, GraphVec).
-5. **Production-Grade** — Error types, observability hooks, capacity inspection everywhere.
+Each engine provides adapter implementations. These live inside db-operations
+but have zero engine dependency — they accept engine-specific config at
+construction time:
 
-## Development
+```
+packages/monitor/src/
+  interfaces/     ← canonical interfaces (no engine deps)
+  impl/           ← general-purpose implementations
+  adapters/
+    sqlvec/       ← SqlVecSlowQueryRecorder, SqlVecDeadlockDetector
+    graphvec/     ← GraphVecSlowQueryRecorder, GraphVecDeadlockDetector
+    noop/         ← NoopSlowQueryRecorder (testing)
+```
+
+---
+
+## Interface Categories
+
+| Category | Interfaces | Coverage |
+|----------|-----------|----------|
+| Health | IHealthProbe, IComponentRegistrar, IHealthOrchestrator | ✅ |
+| Metrics | IMetricsRegistry, ICounter, IHistogram, IGauge | ✅ |
+| Logger | ILogger, ITraceContextProvider | ✅ |
+| Backup | IBackupManager, IPITRManager, IBackupScheduler, IStorageBackend, IBackupRetentionPolicy | ✅ |
+| Migration | IMigrationProvider, IMigrationExecutor | Planned |
+| Audit | IAuditStore, IAuditExporter | ✅ |
+| Security | ITLSManager, ICertMonitor, IEncryptionManager, IRBACProvider, IRateLimiter | ✅ |
+| Monitoring | ISlowQueryRecorder, IDeadlockDetector, IConnectionMonitor, IAlertRuleManager, IResourceQuotaManager | ✅ |
+| Maintenance | IMaintenanceExecutor (VACUUM, ANALYZE, REINDEX) | ✅ |
+| Observability | IDistributedTracer, ITelemetryExporter | ✅ |
+| Scheduling | IScheduler | Planned |
+| Config | IRuntimeConfigProvider | Planned |
+
+---
+
+## Testing
 
 ```bash
-# Setup
-git clone https://github.com/AgentiX-E/db-operations.git
-cd db-operations
-npm install
-
-# Build
-npm run build
-
-# Test (all 866)
-npm test
-
-# Test a single package
-npm test -- packages/core
-
-# Clean
-npm run clean
+npm test              # 866 tests, 29 test files
+npm run bench         # Performance benchmarks
+npm run bench:ycsb    # YCSB-style benchmarks
+npm run typecheck     # TypeScript strict type checking
 ```
+
+---
+
+## Contributing
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ## License
 
-MIT — see [LICENSE](./LICENSE)
-
-## Author
-
-[AgentiX Engineering](https://github.com/AgentiX-E)
+MIT

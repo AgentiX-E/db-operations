@@ -21,11 +21,36 @@
     "version": "changeset version",
     "release": "npm run build && changeset publish",
     "bench": "tsx bench/run-all.ts",
-    "bench:ycsb": "tsx bench/ycsb/run-ycsb.ts"
+    "bench:ycsb": "tsx bench/ycsb/run-ycsb.ts",
+    "docs": "typedoc"
   },
   "devDependencies": {
     "@types/node": "^26.1.0",
     "typescript": "^5.4.0",
     "vitest": "^1.6.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AgentiX-E/db-operations.git"
+  },
+  "description": "Unified, engine-agnostic database operations framework — 20 packages, 866 tests",
+  "keywords": [
+    "database",
+    "operations",
+    "backup",
+    "monitoring",
+    "security",
+    "audit",
+    "metrics",
+    "observability"
+  ],
+  "license": "MIT",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
   }
 }

@@ -28,7 +28,7 @@
     "ci": "npx tsc --noEmit && npm run test && npm run coverage"
   },
   "devDependencies": {
-    "@types/node": "^26.1.0",
+    "@types/node": "^26.1.2",
     "typescript": "^5.4.0"
   },
   "repository": {

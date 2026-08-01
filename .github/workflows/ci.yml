@@ -16,8 +16,17 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # ── Security Audit ────────────────────────────────────────────────
+  security:
+    name: Security (SAST + SCA)
+    uses: ./.github/workflows/_security.yml
+    with:
+      node_version: '22'
+      audit_level: 'high'
+
   # ── Quality Gates ─────────────────────────────────────────────────
   quality:
+    needs: [security]
     uses: ./.github/workflows/_quality.yml
     with:
       node_version: '22'
@@ -26,7 +35,7 @@ jobs:
   # ── Publish (on tag) ──────────────────────────────────────────────
   publish:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [quality]
+    needs: [security, quality]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

@@ -1,6 +1,6 @@
 {
   "name": "@agentix-e/db-operations-health",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Health probes, component registrar, and orchestrator for db-operations",
   "type": "module",
   "private": false,

@@ -1,6 +1,6 @@
 {
   "name": "@agentix-e/db-operations-logger",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Structured logger with trace context propagation for db-operations",
   "type": "module",
   "private": false,

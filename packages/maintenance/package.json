@@ -1,6 +1,6 @@
 {
   "name": "@agentix-e/db-operations-maintenance",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Database maintenance operations (VACUUM, ANALYZE, REINDEX) abstraction for db-operations",
   "type": "module",
   "private": false,

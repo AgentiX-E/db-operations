@@ -1,6 +1,6 @@
 {
   "name": "@agentix-e/db-operations-metrics",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Metrics registry with counter, gauge, and histogram primitives for db-operations",
   "type": "module",
   "private": false,

@@ -80,4 +80,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Micro-benchmark stabilization under concurrent test execution
 - inject-1000 perf threshold — relaxed from 2M to 2.5M ns for single-core GC variance
 
+[1.0.0]: https://github.com/AgentiX-E/db-operations/releases/tag/v1.0.0
 [0.1.0]: https://github.com/AgentiX-E/db-operations/releases/tag/v0.1.0
+
+## [1.0.0] — 2026-08-02
+
+### Added
+
+- **Observability E2E tests** — 30 cross-package integration tests validating
+  InMemoryLogger, HealthOrchestrator, MetricsRegistry, PrometheusPushExporter,
+  InMemoryDistributedTracer, W3CTraceContextProvider, InMemoryDeadlockDetector,
+  InMemorySlowQueryRecorder, and InMemoryConnectionMonitor. (I13)
+- **Security audit pipeline** (`_security.yml`) — npm audit, secret scanning, license
+  compliance in CI gate. (I12)
+- **ADR template** — standardized architecture decision record format. (I14)
+- **SECURITY.md** — vulnerability reporting policy and support SLA. (I15)
+
+### Changed
+
+- **CI** extended with security pipeline in quality gate chain
+  (security → quality → publish). (I12)
+- **.gitignore** env hardening retained.
+
+### Security
+
+- npm audit gate (blocks PRs on HIGH/CRITICAL vulnerabilities).
+- Secret scanning pattern matching against common credential formats.
+- License compliance check (OSI-approved only).

@@ -1,6 +1,6 @@
 {
   "name": "@agentix-e/db-operations-backup",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Backup and PITR abstractions for db-operations",
   "type": "module",
   "private": false,

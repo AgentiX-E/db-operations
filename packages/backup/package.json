@@ -25,7 +25,7 @@
   },
   "dependencies": {
     "@agentix-e/db-operations-core": "^0.1.0",
-    "@aws-sdk/client-s3": "^3.1089.0",
+    "@aws-sdk/client-s3": "^3.1095.0",
     "@aws-sdk/lib-storage": "^3.1089.0"
   },
   "engines": {

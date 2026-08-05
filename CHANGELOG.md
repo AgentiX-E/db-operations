@@ -5,6 +5,24 @@ All notable changes to @agentix-e/db-operations will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] — 2026-08-05
+
+### Added
+
+- **I17 ChaosEngine v2.0** — Production-grade chaos engineering engine
+  - ChaosEngineV2 (468 lines) with declarative ChaosScenario DAG
+  - 8 fault types: latency, partition, crash, packet loss, bitflip, clock skew, disk full, network duplicate
+  - Deterministic SeededRNG for reproducible chaos experiments
+  - Event system with auto-resolve timers
+  - 48 tests (CHAOS1-6 + v1 backward compat)
+- **I13 Observability** — E2E cross-package observability tests (OBS6-OBS11)
+
+### Internal
+
+- **I14 Documentation** — ADR template for db-operations repository
+- **I15 Security** — SECURITY.md added
+- **I16 Release Readiness** — v1.0.0, CHANGELOG entries, npm pack verified
+
 ## [0.1.0] — 2026-07-26
 
 ### Added

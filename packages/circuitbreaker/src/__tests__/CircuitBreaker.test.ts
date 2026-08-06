@@ -91,4 +91,19 @@ describe('InMemoryCircuitBreaker', () => {
     cb2.onFailure();
     expect(cb2.getState()).toBe('open');
   });
+
+  it('onSuccess in closed state decrements failure count', () => {
+    const cb = new InMemoryCircuitBreaker('decrement', { failureThreshold: 3, timeoutMs: 60000 });
+    (cb as any).failureCount = 2;
+    cb.onSuccess();
+    expect(cb.getState()).toBe('closed');
+    expect((cb as any).failureCount).toBe(1);
+  });
+
+  it('onSuccess in closed state floors failure count at zero', () => {
+    const cb = new InMemoryCircuitBreaker('floor', { failureThreshold: 3, timeoutMs: 60000 });
+    (cb as any).failureCount = 0;
+    cb.onSuccess();
+    expect((cb as any).failureCount).toBe(0);
+  });
 });

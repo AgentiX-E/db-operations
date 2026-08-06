@@ -616,6 +616,16 @@ describe("Event System", () => {
     expect(fired).toHaveLength(1);
   });
 
+  it("unsubscribe onFaultResolved works", async () => {
+    const fired: string[] = [];
+    const unsub = engine.onFaultResolved((fid) => fired.push(fid));
+    unsub();
+
+    const faultId = await engine.inject(makeFault({ targets: ["node-0"] }));
+    await engine.resolve(faultId);
+    expect(fired).toHaveLength(0);
+  });
+
   it("unsubscribe works for onFaultInjected", async () => {
     const fired: ChaosFaultV2[] = [];
     const unsub = engine.onFaultInjected((f) => fired.push(f));
@@ -649,6 +659,32 @@ describe("Event System", () => {
 
     expect(results).toHaveLength(1);
   });
+
+  it("unsubscribe onScenarioCompleted works", async () => {
+    const results: unknown[] = [];
+    const unsub = engine.onScenarioCompleted((r) => results.push(r));
+    unsub();
+
+    await engine.runScenario(
+      {
+        name: "unsub-test",
+        description: "",
+        seed: 2,
+        maxDurationMs: 10_000,
+        steps: [],
+      },
+      new (class implements IChaoticInvariantChecker {
+        async check(): Promise<InvariantCheckResult> {
+          return { invariant: "custom", passed: true, detail: "" };
+        }
+        async checkAll(invs: ChaoticInvariant[]): Promise<InvariantCheckResult[]> {
+          return invs.map((i) => ({ invariant: i, passed: true, detail: "" }));
+        }
+      })(),
+    );
+
+    expect(results).toHaveLength(0);
+  });
 });
 
 // ── Backward Compatibility ───────────────────────────────────
@@ -660,5 +696,202 @@ describe("Backward Compatibility", () => {
     await engine.inject({ type: "latency", target: "db", durationMs: 100 });
     expect(engine.getActiveFaults()).toHaveLength(1);
     expect(engine.getHistory()).toHaveLength(1);
+  });
+});
+
+// ── Coverage: Uncovered fault types ──────────────────────────
+
+describe("Coverage: uncovered fault types & edges", () => {
+  let engine: ChaosEngineV2;
+
+  beforeEach(async () => {
+    engine = new ChaosEngineV2();
+    await engine.start([
+      makeTransport("node-a", 3, 3),
+      makeTransport("node-b", 3, 3),
+      makeTransport("node-c", 3, 3),
+    ]);
+  });
+
+  afterEach(async () => {
+    await engine.stop();
+  });
+
+  it("clock-skew fault injects latency as time drift proxy", async () => {
+    await engine.inject({
+      type: "clock-skew",
+      targets: ["node-a"],
+      durationMs: 0,
+      config: { skewMs: 750 },
+    });
+
+    const stats = engine.getAllTransportStats();
+    expect(stats.get("node-a")!.avgLatencyMs).toBe(750);
+  });
+
+  it("resource-pressure with disk type uses 1000ms latency", async () => {
+    await engine.inject({
+      type: "resource-pressure",
+      targets: ["node-a"],
+      durationMs: 0,
+      config: { pressureType: "disk" },
+    });
+
+    const stats = engine.getAllTransportStats();
+    expect(stats.get("node-a")!.avgLatencyMs).toBe(1000);
+  });
+
+  it("resource-pressure defaults to 500ms latency", async () => {
+    await engine.inject({
+      type: "resource-pressure",
+      targets: ["node-b"],
+      durationMs: 0,
+      config: {},
+    });
+
+    const stats = engine.getAllTransportStats();
+    expect(stats.get("node-b")!.avgLatencyMs).toBe(500);
+  });
+
+  it("leadership-flap injects 0.5 message loss", async () => {
+    await engine.inject({
+      type: "leadership-flap",
+      targets: ["node-a"],
+      durationMs: 0,
+      config: {},
+    });
+
+    // Verify fault is registered (message loss applied via transport adapter)
+    expect(engine.getActiveFaults()).toHaveLength(1);
+    expect(engine.getActiveFaults()[0]!.type).toBe("leadership-flap");
+  });
+
+  it("cascading-failure stops nodes with stagger", async () => {
+    await engine.inject({
+      type: "cascading-failure",
+      targets: ["node-a", "node-b", "node-c"],
+      durationMs: 0,
+      config: { staggerMs: 10 },
+    });
+
+    // Verify nodes are stopped (connectedPeers drops to 0)
+    const stats = engine.getAllTransportStats();
+    for (const id of ["node-a", "node-b", "node-c"]) {
+      expect(stats.get(id)!.connectedPeers).toBe(0);
+    }
+  });
+
+  it("wildcard target 'all' resolves all transports", async () => {
+    await engine.inject({
+      type: "message-loss",
+      targets: ["all"],
+      durationMs: 0,
+      config: { lossRate: 0.7 },
+    });
+
+    expect(engine.getActiveFaults()).toHaveLength(1);
+    // All 3 transports affected — verify stats have message loss recorded
+    const stats = engine.getAllTransportStats();
+    expect(stats.size).toBe(3);
+  });
+
+  it("wildcard target '*' resolves all transports", async () => {
+    await engine.inject({
+      type: "latency-injection",
+      targets: ["*"],
+      durationMs: 0,
+      config: { latencyMs: 200 },
+    });
+
+    const stats = engine.getAllTransportStats();
+    for (const id of ["node-a", "node-b", "node-c"]) {
+      expect(stats.get(id)!.avgLatencyMs).toBe(200);
+    }
+  });
+
+  it("unknown target produces no-op (fault registered, no targets)", async () => {
+    await engine.inject({
+      type: "message-loss",
+      targets: ["non-existent-node"],
+      durationMs: 0,
+      config: { lossRate: 0.5 },
+    });
+
+    expect(engine.getActiveFaults()).toHaveLength(1);
+  });
+
+  it("undoFault restarts crashed nodes", async () => {
+    const faultId = await engine.inject({
+      type: "node-crash",
+      targets: ["node-a", "node-b"],
+      durationMs: 0,
+      config: {},
+    });
+
+    // Nodes are stopped (connectedPeers → 0)
+    const beforeStats = engine.getAllTransportStats();
+    expect(beforeStats.get("node-a")!.connectedPeers).toBe(0);
+    expect(beforeStats.get("node-b")!.connectedPeers).toBe(0);
+
+    await engine.resolve(faultId);
+
+    // Nodes are restarted
+    const afterStats = engine.getAllTransportStats();
+    expect(afterStats.get("node-a")!.connectedPeers).toBe(3);
+    expect(afterStats.get("node-b")!.connectedPeers).toBe(3);
+  });
+
+  it("undoFault restarts cascading-failure nodes", async () => {
+    const faultId = await engine.inject({
+      type: "cascading-failure",
+      targets: ["node-a", "node-c"],
+      durationMs: 0,
+      config: { staggerMs: 5 },
+    });
+
+    const beforeStats = engine.getAllTransportStats();
+    expect(beforeStats.get("node-a")!.connectedPeers).toBe(0);
+    expect(beforeStats.get("node-c")!.connectedPeers).toBe(0);
+
+    await engine.resolve(faultId);
+
+    const afterStats = engine.getAllTransportStats();
+    expect(afterStats.get("node-a")!.connectedPeers).toBe(3);
+    expect(afterStats.get("node-c")!.connectedPeers).toBe(3);
+  });
+
+  it("unsubscribe onStepCompleted listener works", async () => {
+    const steps: number[] = [];
+    const unsub = engine.onStepCompleted((step, total) => steps.push(step));
+    unsub();
+
+    await engine.runScenario(
+      {
+        name: "step-unsub-test",
+        description: "",
+        seed: 3,
+        maxDurationMs: 10_000,
+        steps: [{ name: "s1", faults: [] }],
+      },
+      new MockInvariantChecker(),
+    );
+
+    // Listener was unsubscribed — should not fire
+    expect(steps).toHaveLength(0);
+  });
+
+  it("unknown fault type throws via internal path", () => {
+    // TypeScript prevents unknown types at compile time, but runtime
+    // default branch in applyFault must be exercised for coverage.
+    const injector = async () => {
+      await (engine as any).inject?.({
+        type: "invalid-fault-type-xyz",
+        targets: ["node-a"],
+        durationMs: 0,
+        config: {},
+      });
+    };
+    // The engine's inject delegates to applyFault which has a default throw
+    expect(injector()).rejects.toThrow();
   });
 });

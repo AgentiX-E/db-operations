@@ -49,6 +49,17 @@ describe('InMemoryRollingUpgrade', () => {
     expect(true).toBe(true);
   });
 
+  it('execute pauses and resumes cleanly', async () => {
+    const ug = new InMemoryRollingUpgrade();
+    // execute() resets paused to false—so execute is always unpaused.
+    // But pause()/resume() toggle works for the paused flag state.
+    await ug.pause();
+    await ug.resume();
+    const plan: UpgradePlan = { nodes: ['n1', 'n2', 'n3'], batchSize: 1, preScript: 'pre.sh', postScript: 'post.sh' };
+    const phases = await ug.execute(plan);
+    expect(phases.length).toBe(10); // pre(run+comp) + 3*(run+comp) + post(run+comp) = 10
+  });
+
   it('resume works after pause', async () => {
     const ug = new InMemoryRollingUpgrade();
     await ug.pause();

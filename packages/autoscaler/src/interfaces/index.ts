@@ -1,9 +1,5 @@
-import type { ScaleAction, AutoScalerMetrics } from './types.js';
+import type { IAutoScaler, ScaleAction, AutoScalerMetrics, ScalingPolicy, ScalingStats, ScalingEvent, CooldownState, ScaleDirection } from './types.js';
 
-export type { ScaleAction, AutoScalerMetrics };
+export type { ScaleAction, AutoScalerMetrics, ScalingPolicy, ScalingStats, ScalingEvent, CooldownState, ScaleDirection };
 
-export interface IAutoScaler {
-  evaluate(metrics: AutoScalerMetrics): Promise<ScaleAction | null>;
-  getHistory(): ScaleAction[];
-  configure(min: number, max: number, scaleUpThreshold: number, scaleDownThreshold: number): void;
-}
+export { IAutoScaler };

@@ -1,21 +1,2 @@
-export type {
-  FederatedNode,
-  NodeRole,
-  NodeHealth,
-  NodeCapability,
-  NodeLoad,
-  QueryIntent,
-  ConsistencyLevel,
-  FederatedQuery,
-  NodeAssignment,
-  QueryPlan,
-  RoutingStrategy,
-  RoutingPolicy,
-  CostThreshold,
-  NodeResult,
-  FederatedResult,
-  FailoverEvent,
-  IFederatedQueryRouter,
-  NodeExecutor,
-  RouterStats,
-} from "./types.js";
+export * from "./types.js";
+export * from "./schema-federation.js";

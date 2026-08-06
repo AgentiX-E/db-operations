@@ -19,4 +19,23 @@ export type {
   NodeExecutor,
   RouterStats,
 } from "./interfaces/index.js";
+export type {
+  ISchemaFederator,
+  SchemaSnapshot,
+  SchemaDrift,
+  DriftSeverity,
+  DriftType,
+  DriftRepair,
+  RepairAction,
+  CoordinatedMigration,
+  CoordinationState,
+  CoordinationMode,
+  ShardMigrationResult,
+  DriftCheckResult,
+  DriftMonitorConfig,
+  DriftMonitorStats,
+  ReferenceStrategy,
+  SchemaRule,
+} from "./interfaces/index.js";
 export { FederatedQueryRouter } from "./impl/FederatedQueryRouter.js";
+export { SchemaFederator } from "./impl/SchemaFederator.js";

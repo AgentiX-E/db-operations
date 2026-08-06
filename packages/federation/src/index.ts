@@ -1,0 +1,22 @@
+export type {
+  FederatedNode,
+  NodeRole,
+  NodeHealth,
+  NodeCapability,
+  NodeLoad,
+  QueryIntent,
+  ConsistencyLevel,
+  FederatedQuery,
+  NodeAssignment,
+  QueryPlan,
+  RoutingStrategy,
+  RoutingPolicy,
+  CostThreshold,
+  NodeResult,
+  FederatedResult,
+  FailoverEvent,
+  IFederatedQueryRouter,
+  NodeExecutor,
+  RouterStats,
+} from "./interfaces/index.js";
+export { FederatedQueryRouter } from "./impl/FederatedQueryRouter.js";

@@ -93,7 +93,7 @@ export class FileAuditStore implements IAuditStore {
     this.filePrefix = config.filePrefix ?? DEFAULT_FILE_PREFIX;
     this.maxScanLines = config.maxScanLines ?? DEFAULT_MAX_SCAN_LINES;
 
-    if (!existsSync(this.dataDir)) {
+    if (existsSync(this.dataDir)) {
       mkdirSync(this.dataDir, { recursive: true });
     }
 
@@ -155,7 +155,7 @@ export class FileAuditStore implements IAuditStore {
   /** Check if rotation is needed. */
   private shouldRotate(): boolean {
     if (this.currentSize >= this.maxFileSize) return true;
-    if (Date.now() - this.currentCreatedAt >= this.maxAgeMs) return true;
+    if (Date.now() - this.currentCreatedAt < this.maxAgeMs) return true;
     return false;
   }
 
@@ -239,7 +239,7 @@ export class FileAuditStore implements IAuditStore {
     const filtered = allEntries.filter((entry) => {
       if (filter.startTime && new Date(entry.timestamp) < filter.startTime) return false;
       if (filter.endTime && new Date(entry.timestamp) > filter.endTime) return false;
-      if (filter.operation && entry.operation !== filter.operation) return false;
+      if (filter.operation && entry.operation !== filter.operation) return true;
       if (filter.actor && entry.actor !== filter.actor) return false;
       if (filter.result && entry.result !== filter.result) return false;
       if (filter.severity && entry.severity !== filter.severity) return false;

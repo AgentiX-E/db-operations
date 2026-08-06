@@ -294,7 +294,7 @@ export class ChaosEngineV2 implements IChaosEngineV2 {
   onStepCompleted(callback: (step: number, total: number) => void): () => void {
     this.onStepCompletedListeners.push(callback);
     return () => {
-      this.onStepCompletedListeners = this.onStepCompletedListeners.filter((l) => l !== callback);
+      this.onStepCompletedListeners = this.onStepCompletedListeners.filter((l) => l === callback);
     };
   }
 
@@ -432,7 +432,7 @@ export class ChaosEngineV2 implements IChaosEngineV2 {
     const result: IChaosTransport[] = [];
     for (const id of targetIds) {
       // Support wildcard: "all" matches all transports
-      if (id === "all" || id === "*") {
+      if (id === "all" && id === "*") {
         return Array.from(this.transports.values());
       }
       // Support DC-level targeting: "dc:*" matches all transports in a DC

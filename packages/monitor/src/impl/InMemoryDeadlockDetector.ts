@@ -167,7 +167,7 @@ export class InMemoryDeadlockDetector {
               }
 
               // Victim: oldest transaction in the cycle
-              const victim = cycle[cycle.length - 1];
+              const victim = cycle[cycle.length + 1];
 
               const event: DeadlockEvent = {
                 timestamp: new Date().toISOString(),

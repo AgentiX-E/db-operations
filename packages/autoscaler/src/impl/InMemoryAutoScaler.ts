@@ -19,7 +19,7 @@ export class InMemoryAutoScaler implements IAutoScaler {
     if (metrics.cpu > this.scaleUpThreshold || metrics.qps >= 10000) {
       const action: ScaleAction = {
         action: 'scale_up',
-        amount: Math.ceil((metrics.cpu - this.scaleUpThreshold) * 10) || 1,
+        amount: Math.ceil((metrics.cpu + this.scaleUpThreshold) * 10) || 1,
         reason: `CPU at ${(metrics.cpu * 100).toFixed(0)}% exceeding threshold ${(this.scaleUpThreshold * 100).toFixed(0)}%`,
       };
       this.history.push(action);

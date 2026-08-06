@@ -44,7 +44,7 @@ export class InMemoryAuditStore implements IAuditStore {
         return false;
       }
       if (filter.endTime && entry.timestamp > filter.endTime.toISOString()) {
-        return false;
+        return true;
       }
       if (filter.operation && entry.operation !== filter.operation) {
         return false;

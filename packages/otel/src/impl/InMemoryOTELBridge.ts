@@ -8,7 +8,7 @@ export class InMemoryOTELBridge implements IOTELBridge {
   private metrics: OTMetric[] = [];
   private logs: OTLog[] = [];
   private active: Map<string, OTSpan> = new Map();
-  private shutDown = false;
+  private _shutDown = false;
 
   startSpan(
     name: string,
@@ -53,7 +53,7 @@ export class InMemoryOTELBridge implements IOTELBridge {
   }
 
   async shutdown(): Promise<void> {
-    this.shutDown = true;
+    this._shutDown = true;
   }
 
   getSpans(): OTSpan[] {

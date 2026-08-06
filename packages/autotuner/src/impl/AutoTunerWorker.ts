@@ -12,7 +12,7 @@
  */
 
 import type { IAutoTuner } from '../interfaces/index.js';
-import type { TuningRecommendation, TuningConfig, AutoScalerMetrics } from '../interfaces/types.js';
+import type { TuningRecommendation, AutoScalerMetrics } from '../interfaces/types.js';
 
 // ── Config ───────────────────────────────────────────────────
 

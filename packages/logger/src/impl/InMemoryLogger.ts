@@ -115,14 +115,43 @@ export class InMemoryLogger implements ILogger {
     this._entries.push(entry);
   }
 
-  private _log(level: LogLevel, contextOrMsg: unknown, msg?: string): void {
-    if (msg !== undefined) {
-      // First arg is context object
+  /**
+   * Resolve overloaded log arguments.
+   *
+   * Handles three TypeScript overload patterns correctly:
+   *   1. log("message")           → contextOrMsg = "message", msg = undefined
+   *   2. log(context, "message")  → contextOrMsg = object, msg = "message"
+   *   3. log("message", {extra})  → contextOrMsg = "message", msg = {extra}
+   *      (TS resolves to 1-arg overload, but second arg still passed at runtime)
+   *
+   * Case 3 is the bug: without type-aware dispatch, runtime sees msg !== undefined
+   * and incorrectly treats the string "message" as context and the object as message.
+   *
+   * Fix: inspect the FIRST argument — if it is a string, it is always the message.
+   * Only treat it as context if it is a non-string truthy object.
+   */
+  private _log(level: LogLevel, contextOrMsg: unknown, extra?: unknown): void {
+    const firstIsString = typeof contextOrMsg === 'string';
+    const firstIsObject = contextOrMsg !== null && typeof contextOrMsg === 'object' && !Array.isArray(contextOrMsg);
+
+    if (firstIsString) {
+      // Case 1: log("message")         → extra is undefined
+      // Case 3: log("message", {ctx})   → extra is the extra context object
+      const extraCtx = extra !== undefined && typeof extra === 'object' && !Array.isArray(extra)
+        ? extra as Record<string, unknown>
+        : undefined;
+      this._pushEntry(this._makeEntry(level, contextOrMsg, extraCtx));
+    } else if (firstIsObject) {
+      // Case 2: log(contextObj, "message")
       const ctx = contextOrMsg as Record<string, unknown>;
+      const msg = typeof extra === 'string' ? extra : String(extra ?? '');
       this._pushEntry(this._makeEntry(level, msg, ctx));
+    } else if (extra !== undefined && typeof extra === 'string') {
+      // Case 2 variant: log(nonObject, "message")
+      this._pushEntry(this._makeEntry(level, extra));
     } else {
-      // First arg is message string
-      this._pushEntry(this._makeEntry(level, contextOrMsg as string));
+      // Fallback: coerce to string
+      this._pushEntry(this._makeEntry(level, String(contextOrMsg ?? '')));
     }
   }
 

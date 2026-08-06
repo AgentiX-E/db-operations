@@ -431,13 +431,16 @@ describe("E2E: Full Operational Lifecycle", () => {
     expect(alertMgr).toBeDefined();
 
     // ── Verification log ─────────────────────────────
-    logger.info({
-      phases: [
-        "bootstrap", "rbac", "encryption", "backup",
-        "upgrade", "maintenance", "circuit-breaker",
-        "audit", "metrics", "tracing", "monitoring",
-      ],
-    } as any, "lifecycle-complete");
+    logger.info(
+      {
+        phases: [
+          "bootstrap", "rbac", "encryption", "backup",
+          "upgrade", "maintenance", "circuit-breaker",
+          "audit", "metrics", "tracing", "monitoring",
+        ],
+      },
+      "lifecycle-complete",
+    );
 
     const allLogs = logger.getEntries();
     const lifecycleLogs = allLogs.filter((l: any) => l.message === "lifecycle-complete");

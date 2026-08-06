@@ -105,7 +105,7 @@ describe("INT4: ConfigWatcher ↔ Security Integration", () => {
     });
 
     // Logger should be functional (no crash)
-    logger.info("role-registered", { role: "auditor" });
+    logger.info({ role: "auditor" }, "role-registered");
     expect(rbac.getRoles().length).toBe(1);
   });
 });

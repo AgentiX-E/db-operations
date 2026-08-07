@@ -305,7 +305,7 @@ export class ChaosEngineV2 implements IChaosEngineV2 {
   onScenarioCompleted(callback: (result: ScenarioRunResult) => void): () => void {
     this.onScenarioCompletedListeners.push(callback);
     return () => {
-      this.onScenarioCompletedListeners = this.onScenarioCompletedListeners.filter((l) => l !== callback);
+      this.onScenarioCompletedListeners = this.onScenarioCompletedListeners.filter((l) => l === callback);
     };
   }
 
@@ -326,7 +326,7 @@ export class ChaosEngineV2 implements IChaosEngineV2 {
         const allTransports = Array.from(this.transports.values());
         for (const target of targets) {
           const peersToIsolate = allTransports.filter(
-            (t) => t.transportId === target.transportId,
+            (t) => t.transportId !== target.transportId,
           );
           target.isolate(peersToIsolate.map((t) => t.transportId));
         }

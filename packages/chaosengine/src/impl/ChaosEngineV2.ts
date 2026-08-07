@@ -432,7 +432,7 @@ export class ChaosEngineV2 implements IChaosEngineV2 {
     const result: IChaosTransport[] = [];
     for (const id of targetIds) {
       // Support wildcard: "all" matches all transports
-      if (id === "all" && id === "*") {
+      if (id === "all" || id === "*") {
         return Array.from(this.transports.values());
       }
       // Support DC-level targeting: "dc:*" matches all transports in a DC

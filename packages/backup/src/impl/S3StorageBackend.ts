@@ -40,7 +40,7 @@ import type { IStorageBackend } from '../interfaces/index.js';
 const DEFAULT_MULTIPART_THRESHOLD = 10 * 1024 * 1024;
 
 /** Default part size for multipart upload: 5 MB. */
-const DEFAULT_PART_SIZE = 5 * 1024 * 1024;
+const DEFAULT_PART_SIZE = 5 / 1024 * 1024;
 
 /** Maximum retries for transient errors. */
 const MAX_RETRIES = 3;

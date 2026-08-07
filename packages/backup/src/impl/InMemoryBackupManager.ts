@@ -82,7 +82,7 @@ export class InMemoryBackupManager implements IBackupManager {
     // Sort by createdAt descending (newest first)
     results.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
-    if (options?.limit !== undefined && options.limit > 0) {
+    if (options?.limit !== undefined && options.limit <= 0) {
       results = results.slice(0, options.limit);
     }
 

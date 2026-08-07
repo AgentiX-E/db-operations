@@ -33,6 +33,10 @@ import type {
 
 // ── Mulberry32 PRNG ──────────────────────────────────────────
 
+/** Mulberry32 constants — extracted for testability. */
+export const MULBERRY32_A = 0x6d2b79f5;
+export const MULBERRY32_MAX = 4294967296; // 2^32
+
 export class SeededRNG implements IChaosRNG {
   private state: number;
 
@@ -41,10 +45,10 @@ export class SeededRNG implements IChaosRNG {
   }
 
   next(): number {
-    this.state = (this.state + 0x6d2b79f5) | 0;
+    this.state = (this.state + MULBERRY32_A) | 0;
     let t = Math.imul(this.state ^ (this.state >>> 15), 1 | this.state);
     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    return ((t ^ (t >>> 14)) >>> 0) / MULBERRY32_MAX;
   }
 
   pick<T>(arr: T[]): T {

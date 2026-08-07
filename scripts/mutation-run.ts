@@ -158,8 +158,8 @@ function findTest(pkg: string): string[] {
   if (!existsSync(dir)) return [];
   return readdirSync(dir)
     .filter(f => f.endsWith('.test.ts') && !f.includes('e2e') && !f.includes('integration') &&
-      !f.includes('mutation') && !f.includes('benchmark') && !f.includes('stress') &&
-      !f.includes('fuzz') && !f.includes('chaos'))
+      !f.includes('benchmark') && !f.includes('stress') &&
+      !f.includes('fuzz'))
     .map(f => join(dir, f));
 }
 

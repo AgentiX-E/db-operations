@@ -84,8 +84,9 @@ export class InMemoryDistributedTracer implements IDistributedTracer {
 
     // Format: 00-{traceId}-{spanId}-01
     const parts = header.split('-');
-    if (parts.length < 4) return { traceId: parts[1] ?? '', parentSpanId: parts[2] ?? '' };
-    return { traceId: parts[1]!, parentSpanId: parts[2]! };
+    // Always extract traceId and spanId from parts[1] and parts[2]
+    // regardless of part count; undefined parts default to ''
+    return { traceId: parts[1] ?? '', parentSpanId: parts[2] ?? '' };
   }
 
   private determineReturnParent(spanId: string): string | undefined {

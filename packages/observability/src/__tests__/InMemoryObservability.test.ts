@@ -115,6 +115,23 @@ describe('InMemoryDistributedTracer', () => {
     expect(result).toBeUndefined();
   });
 
+  // O8.1: extract handles malformed 5-part header gracefully
+  it('O8.1: extract handles malformed 5-part header', () => {
+    const tracer = new InMemoryDistributedTracer();
+    const result = tracer.extract({ traceparent: '00-abc-def-gh-01-extra' });
+    expect(result!.traceId).toBe('abc');
+    expect(result!.parentSpanId).toBe('def');
+  });
+
+  // O8.2: extract handles empty parts in header
+  it('O8.2: extract handles header with empty traceId', () => {
+    const tracer = new InMemoryDistributedTracer();
+    const result = tracer.extract({ traceparent: '00--def-01' });
+    expect(result).toBeDefined();
+    expect(result!.traceId).toBe('');
+    expect(result!.parentSpanId).toBe('def');
+  });
+
   // O11: startSpan attributes passed through correctly
   it('O11: startSpan attributes passed through correctly', () => {
     const tracer = new InMemoryDistributedTracer();

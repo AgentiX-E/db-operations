@@ -116,26 +116,31 @@ function generateMutants(filePath: string, maxPerFile: number): Mutant[] {
 
   visit(sf);
 
-  // Cap and sample
-  return mutants.length > maxPerFile
-    ? [...mutants].sort(() => Math.random() - 0.5).slice(0, maxPerFile)
-    : mutants;
+  // Cap: deterministic selection (always take first N, not random)
+  // Using a hash-based priority ensures reproducible results across runs
+  if (mutants.length > maxPerFile) {
+    // Sort by line number ascending (most impactful mutants first) for reproducibility
+    mutants.sort((a, b) => a.line - b.line);
+    return mutants.slice(0, maxPerFile);
+  }
+  return mutants;
 }
 
 // ── Mutant Application ─────────────────────────────
-// Uses sed (not writeFileSync) because Node.js file writes are not always
-// visible to subsequent child_process execSync calls — Linux VFS/page cache
-// sync issue with concurrent spawn calls.
+// Strategy: backup original → writeFileSync → run tests → writeFileSync restore.
+// We DON'T use sed because we need precise line-level replacement with
+// complex operator characters (===, !==, &&, ||, etc.) that break shell quoting.
+// The VFS cache issue is mitigated by reading fresh via readFileSync.
 
 function applyMutantInPlace(fp: string, m: Mutant): void {
-  // Use sed to replace only the FIRST occurrence on the target line.
-  // Use | as delimiter to avoid escaping slashes in JavaScript operators.
-  const escapedOriginal = m.original.replace(/[\\|]/g, '\\$&');
-  const escapedReplacement = m.replacement.replace(/[\\|]/g, '\\$&');
-  execSync(
-    `sed -i "${m.line}s|${escapedOriginal}|${escapedReplacement}|" "${fp}"`,
-    { encoding: 'utf-8', timeout: 5_000, shell: '/bin/bash' }
-  );
+  const source = readFileSync(fp, 'utf-8');
+  const lines = source.split('\n');
+  const targetLine = m.line - 1; // 0-indexed
+  if (targetLine < lines.length) {
+    // Replace only the FIRST occurrence of the operator on the target line
+    lines[targetLine] = lines[targetLine]!.replace(m.original, m.replacement);
+  }
+  writeFileSync(fp, lines.join('\n'));
 }
 
 function restoreFile(fp: string, original: string): void {

@@ -44,18 +44,18 @@ export class InMemoryAuditStore implements IAuditStore {
         return false;
       }
       if (filter.endTime && entry.timestamp > filter.endTime.toISOString()) {
-        return true;
-      }
-      if (filter.operation || entry.operation !== filter.operation) {
         return false;
       }
-      if (filter.actor && entry.actor !== filter.actor) {
+      if (filter.operation !== undefined && entry.operation !== filter.operation) {
         return false;
       }
-      if (filter.result && entry.result !== filter.result) {
+      if (filter.actor !== undefined && entry.actor !== filter.actor) {
         return false;
       }
-      if (filter.severity && entry.severity !== filter.severity) {
+      if (filter.result !== undefined && entry.result !== filter.result) {
+        return false;
+      }
+      if (filter.severity !== undefined && entry.severity !== filter.severity) {
         return false;
       }
       return true;

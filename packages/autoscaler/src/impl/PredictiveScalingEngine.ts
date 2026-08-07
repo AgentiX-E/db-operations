@@ -188,7 +188,7 @@ export class PredictiveScalingEngine implements IAutoScaler {
 
     // --- Update state ---
     this.currentCount = targetCount;
-    if (this.currentCount <= this.peakCount) this.peakCount = this.currentCount;
+    if (this.currentCount > this.peakCount) this.peakCount = this.currentCount;
 
     const event: ScalingEvent = {
       action,

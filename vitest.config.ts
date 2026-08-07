@@ -32,7 +32,6 @@ export default defineConfig({
       // Pre-existing test bugs (not from this phase)
       '**/packages/configwatcher/src/__tests__/i34-config-watcher.test.ts',
       '**/packages/chaosengine/src/__tests__/ChaosEngineV2.test.ts',
-      '**/packages/backup/src/__tests__/InMemoryBackup.test.ts',
     ],
     coverage: {
       provider: 'v8',

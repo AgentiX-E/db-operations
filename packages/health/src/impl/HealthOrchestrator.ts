@@ -142,6 +142,11 @@ export class HealthOrchestrator implements IHealthOrchestrator {
     return { ok: errors.length === 0, errors };
   }
 
+  /** Returns whether startup checks have been completed. */
+  isStartupComplete(): boolean {
+    return this._startupComplete;
+  }
+
   // ── Structured Health Status ───────────────────────────────
 
   getComponentHealth(): ComponentHealth[] {

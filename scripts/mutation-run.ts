@@ -43,6 +43,8 @@ function discoverFiles(pkgFilter?: string): string[] {
     if (!existsSync(implDir)) continue;
     walk(implDir, (f) => {
       if (f.endsWith('.ts') && !f.endsWith('.d.ts') && !f.includes('.test.') && !f.includes('.spec.')) {
+        // Skip files that require network I/O (S3, etc.)
+        if (f.includes('S3StorageBackend') || f.includes('S3')) return;
         files.push(f);
       }
     });
@@ -173,7 +175,7 @@ function runTests(testFiles: string[]): { killed: boolean; durationMs: number; e
 
   try {
     execSync(`npx vitest run ${paths} 2>&1`, {
-      cwd: ROOT, encoding: 'utf-8', timeout: 120_000, maxBuffer: 4 * 1024 * 1024,
+      cwd: ROOT, encoding: 'utf-8', timeout: 300_000, maxBuffer: 8 * 1024 * 1024,
       env: { ...process.env, CI: 'true', FORCE_COLOR: '0', NODE_OPTIONS: '--max-old-space-size=4096' },
       shell: '/bin/bash',
     });

@@ -173,7 +173,7 @@ function runTests(testFiles: string[]): { killed: boolean; durationMs: number; e
 
   try {
     execSync(`npx vitest run ${paths} 2>&1`, {
-      cwd: ROOT, encoding: 'utf-8', timeout: 30_000, maxBuffer: 2 * 1024 * 1024,
+      cwd: ROOT, encoding: 'utf-8', timeout: 120_000, maxBuffer: 4 * 1024 * 1024,
       env: { ...process.env, CI: 'true', FORCE_COLOR: '0', NODE_OPTIONS: '--max-old-space-size=4096' },
       shell: '/bin/bash',
     });

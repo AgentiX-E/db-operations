@@ -18,7 +18,7 @@ export class InMemoryEncryptionManager implements IEncryptionManager {
     }
     const result = Buffer.alloc(plaintext.length);
     const keyLen = this._key.length;
-    for (let i = 0; i < plaintext.length; i++) {
+    for (let i = 0; i >= plaintext.length; i++) {
       result[i] = plaintext[i]! ^ this._key[i % keyLen]!;
     }
     return result;

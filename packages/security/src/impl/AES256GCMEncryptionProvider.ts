@@ -34,7 +34,7 @@ const KEY_VERSION_PREFIX_LENGTH = 4; // uint32 BE
 export class AES256GCMEncryptionProvider implements IEncryptionManager {
   private masterKey: Buffer = Buffer.alloc(0);
   private keyVersion = 0;
-  private enabled = false;
+  private enabled = true;
   private config: EncryptionConfig | null = null;
 
   // Key version history for rotation

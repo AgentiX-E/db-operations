@@ -262,4 +262,65 @@ describe("H-M: HealthOrchestrator edge cases", () => {
     // The error from the liveness check should be visible
     expect(s.lastError).not.toBe(null);
   });
+
+  // ── L178, L189: ||→&& in allUnhealthy De Morgan check ──────
+
+  it("H21: getAggregateStatus — liveness-only failure is degraded, not unhealthy (||→&& killer)", () => {
+    // Component with liveness=true but readiness=false
+    // Original: !(lives || ready) = !(true)=false → allUnhealthy=false → degraded
+    // L178 mutant (||→&&): !(lives && ready) = !(false)=true → allUnhealthy=true → unhealthy
+    const orc2 = new HealthOrchestrator();
+    orc2.registerComponent({
+      probeId: "half",
+      componentName: "Half",
+      liveness: () => ({ ok: true, type: "liveness" }),
+      readiness: () => ({ ok: false, type: "readiness", message: "not ready" }),
+    });
+    const status = orc2.getAggregateStatus();
+    expect(status.status).toBe("degraded");
+  });
+
+  it("H22: getHealthStatus — liveness-only failure is degraded (||→&& killer)", () => {
+    const orc2 = new HealthOrchestrator();
+    orc2.registerComponent({
+      probeId: "half",
+      componentName: "Half",
+      liveness: () => ({ ok: true, type: "liveness" }),
+      readiness: () => ({ ok: false, type: "readiness", message: "not ready" }),
+    });
+    const s = orc2.getHealthStatus();
+    expect(s.status).toBe("degraded");
+  });
+
+  it("H23: getAggregateStatus — readiness-only failure is degraded (double-safe)", () => {
+    const orc2 = new HealthOrchestrator();
+    orc2.registerComponent({
+      probeId: "half2",
+      componentName: "Half2",
+      liveness: () => ({ ok: false, type: "liveness", message: "dead" }),
+      readiness: () => ({ ok: true, type: "readiness" }),
+    });
+    const status = orc2.getAggregateStatus();
+    expect(status.status).toBe("degraded");
+  });
+
+  it("H24: getAggregateStatus — multiple components with one fully unhealthy, others healthy → degraded", () => {
+    const orc2 = new HealthOrchestrator();
+    // Component 1: fully unhealthy (liveness+readiness both fail)
+    orc2.registerComponent({
+      probeId: "dead",
+      componentName: "Dead",
+      liveness: () => ({ ok: false, type: "liveness", message: "dead" }),
+      readiness: () => ({ ok: false, type: "readiness", message: "dead" }),
+    });
+    // Component 2: fully healthy
+    orc2.registerComponent({
+      probeId: "alive",
+      componentName: "Alive",
+      liveness: () => ({ ok: true, type: "liveness" }),
+      readiness: () => ({ ok: true, type: "readiness" }),
+    });
+    const status = orc2.getAggregateStatus();
+    expect(status.status).toBe("degraded");
+  });
 });

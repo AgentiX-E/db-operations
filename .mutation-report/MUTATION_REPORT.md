@@ -1,20 +1,22 @@
 # Mutation Test Results
 
-> Time: 2026-08-09T12:37:13.589Z
+> Time: 2026-08-09T23:45:58.587Z
 > Files scanned: 2
-> Mutants: 21 executed (+0 compile errors)
-> Killed: 20 | Survived: 1
-> **Score: 95.2%**
-> Duration: 18s
+> Mutants: 27 executed (+0 compile errors)
+> Killed: 24 | Survived: 3
+> **Score: 88.9%**
+> Duration: 22s
 
 ## Package Scores
 
 | Package | Killed | Survived | CE | Score |
 |---------|--------|----------|-----|-------|
-| 🟢 logger | 20 | 1 | 0 | **95.2%** |
+| 🟡 health | 24 | 3 | 0 | **88.9%** |
 
 ## Survivors (Test Gaps)
 
 | ID | Pkg | Op | Line | Original→Replacement |
 |----|-----|----|------|----------------------|
-| MUT_314749 | logger | Boolean | L143 | `false` → `true` |
+| MUT_a115eb | health | Boolean | L47 | `true` → `false` |
+| MUT_691580 | health | Arith/Logic | L157 | `/` → `*` |
+| MUT_261689 | health | Arith/Logic | L199 | `/` → `*` |

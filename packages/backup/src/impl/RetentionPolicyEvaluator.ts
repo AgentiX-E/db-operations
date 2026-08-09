@@ -51,18 +51,18 @@ export class RetentionPolicyEvaluator implements IBackupRetentionPolicy {
     for (const snap of candidates) {
       // Skip if keepRecent is set and snapshot is younger than the duration
       if (this.policy.keepRecent) {
-        const age = Date.now() - new Date(snap.createdAt).getTime();
+        const snapAge = Date.now() - new Date(snap.createdAt).getTime();
         const keepRecentMs = parseDurationToMs(this.policy.keepRecent);
-        if (age < keepRecentMs) {
+        if (snapAge < keepRecentMs) {
           continue;
         }
       }
 
       // Skip if minAge is set and snapshot not old enough
       if (this.policy.minAge) {
-        const age = Date.now() - new Date(snap.createdAt).getTime();
+        const snapAge = Date.now() - new Date(snap.createdAt).getTime();
         const minAgeMs = parseDurationToMs(this.policy.minAge);
-        if (age < minAgeMs) {
+        if (snapAge < minAgeMs) {
           continue;
         }
       }
@@ -124,10 +124,10 @@ function parseDurationToMs(duration: string): number {
   const minutes = Number(match[3] ?? 0);
   const seconds = Number(match[4] ?? 0);
 
-  return (
-    days * MILLISECONDS_PER_DAY +
-    hours * MILLISECONDS_PER_HOUR +
-    minutes * MILLISECONDS_PER_MINUTE +
-    seconds * MILLISECONDS_PER_SECOND
-  );
+  const daysMs = days * MILLISECONDS_PER_DAY;
+  const hoursMs = hours * MILLISECONDS_PER_HOUR;
+  const minutesMs = minutes * MILLISECONDS_PER_MINUTE;
+  const secondsMs = seconds * MILLISECONDS_PER_SECOND;
+
+  return daysMs + hoursMs + minutesMs + secondsMs;
 }

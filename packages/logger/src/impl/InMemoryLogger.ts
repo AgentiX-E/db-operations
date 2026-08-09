@@ -140,7 +140,14 @@ export class InMemoryLogger implements ILogger {
       const extraNotNull = extra !== undefined;
       const extraIsObject = typeof extra === 'object';
       const extraNotArray = !Array.isArray(extra);
-      const validCtx = extraNotNull && extraIsObject && extraNotArray;
+      let validCtx = false;
+      if (extraNotNull) {
+        if (extraIsObject) {
+          if (extraNotArray) {
+            validCtx = true;
+          }
+        }
+      }
       const extraCtx = validCtx
         ? extra as Record<string, unknown>
         : undefined;
@@ -153,7 +160,10 @@ export class InMemoryLogger implements ILogger {
       // Case 2 variant or fallback
       const extraNotNull = extra !== undefined;
       const extraIsString = typeof extra === 'string';
-      const useExtra = extraNotNull && extraIsString;
+      let useExtra = false;
+      if (extraNotNull) {
+        useExtra = extraIsString;
+      }
       const msg = useExtra
         ? extra as string
         : String(contextOrMsg ?? '');

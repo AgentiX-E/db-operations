@@ -137,21 +137,27 @@ export class InMemoryLogger implements ILogger {
     if (firstIsString) {
       // Case 1: log("message")         → extra is undefined
       // Case 3: log("message", {ctx})   → extra is the extra context object
-      const extraCtx = extra !== undefined && typeof extra === 'object' && !Array.isArray(extra)
+      const extraNotNull = extra !== undefined;
+      const extraIsObject = typeof extra === 'object';
+      const extraNotArray = !Array.isArray(extra);
+      const validCtx = extraNotNull && extraIsObject && extraNotArray;
+      const extraCtx = validCtx
         ? extra as Record<string, unknown>
         : undefined;
       this._pushEntry(this._makeEntry(level, contextOrMsg, extraCtx));
     } else if (firstIsObject) {
-      // Case 2: log(contextObj, "message")
       const ctx = contextOrMsg as Record<string, unknown>;
       const msg = typeof extra === 'string' ? extra : String(extra ?? '');
       this._pushEntry(this._makeEntry(level, msg, ctx));
-    } else if (extra !== undefined && typeof extra === 'string') {
-      // Case 2 variant: log(nonObject, "message")
-      this._pushEntry(this._makeEntry(level, extra));
     } else {
-      // Fallback: coerce to string
-      this._pushEntry(this._makeEntry(level, String(contextOrMsg ?? '')));
+      // Case 2 variant or fallback
+      const extraNotNull = extra !== undefined;
+      const extraIsString = typeof extra === 'string';
+      const useExtra = extraNotNull && extraIsString;
+      const msg = useExtra
+        ? extra as string
+        : String(contextOrMsg ?? '');
+      this._pushEntry(this._makeEntry(level, msg));
     }
   }
 

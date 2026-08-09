@@ -39,6 +39,15 @@ function failProbe(id: string, name: string): IHealthProbe {
   });
 }
 
+/** Probe with liveness passing but readiness failing — tests allUnhealthy discrimination. */
+function degradedProbe(id: string, name: string): IHealthProbe {
+  return componentProbe(id, name, {
+    liveness: () => ({ ok: true }),
+    readiness: () => ({ ok: false, message: "not-ready" }),
+    startup: () => ({ ok: true }),
+  });
+}
+
 // ── ComponentProbe ──────────────────────────────────────────
 
 describe("H-M: ComponentProbe nullish coalescing chain", () => {
@@ -96,8 +105,9 @@ describe("H-M: HealthOrchestrator edge cases", () => {
     const results = orch.getComponentHealth();
     expect(results).toHaveLength(1);
     expect(results[0].componentId).toBe("a");
-    // L162: uptimeSeconds uses Math.floor(Δ/1000) — floor division must be >= 0
+    // L157-163: uptimeSeconds must be 0 for newly registered component (not *1000)
     expect(results[0].uptimeSeconds).toBeGreaterThanOrEqual(0);
+    expect(results[0].uptimeSeconds).toBeLessThanOrEqual(0);  // exactly 0
   });
 
   it("H6: getAggregateStatus with empty registry returns healthy", () => {
@@ -130,12 +140,22 @@ describe("H-M: HealthOrchestrator edge cases", () => {
     expect(s.status).toBe("degraded");
   });
 
+  // L178/L189: ||→&& mutant — allUnhealthy every() returns false when some are healthy
+  it("H9b: getAggregateStatus — one unhealthy but not all unhealthy", () => {
+    orch.registerComponent(liveProbe("a", "A"));
+    orch.registerComponent(degradedProbe("b", "B"));
+    orch.registerComponent(failProbe("c", "C"));
+    const s = orch.getAggregateStatus();
+    // Component b has liveness ok → not allUnhealthy → status is degraded, not unhealthy
+    expect(s.status).toBe("degraded");
+  });
+
   it("H10: getHealthStatus includes uptimeSeconds", () => {
     orch.registerComponent(liveProbe("a", "A"));
     const status = orch.getHealthStatus();
-    // L202: /→* mutant — uptime must remain a reasonable number
+    // L199-201: uptimeSeconds for just-constructed orchestrator should be 0-1
     expect(status.uptimeSeconds).toBeGreaterThanOrEqual(0);
-    expect(status.uptimeSeconds).toBeLessThanOrEqual(86_400); // < 1 day
+    expect(status.uptimeSeconds).toBeLessThanOrEqual(1);
     expect(typeof status.uptimeSeconds).toBe("number");
     expect(Number.isFinite(status.uptimeSeconds)).toBe(true);
   });
@@ -223,10 +243,23 @@ describe("H-M: HealthOrchestrator edge cases", () => {
     expect(result2.ok).toBe(true);
   });
 
-  // L198: lastError !== null check in getHealthStatus
+  // L199: lastError !== null check — if !==→===, find() picks wrong component
   it("H20: getHealthStatus lastError is null for healthy components", () => {
     orch.registerComponent(liveProbe("a", "A"));
     const s = orch.getHealthStatus();
     expect(s.lastError).toBe(null);
+  });
+
+  it("H20b: lastError propagates from failed liveness check", () => {
+    // Errored liveness sets lastError — must propagate through find()
+    const throwingProbe: IHealthProbe = componentProbe("err", "Err", {
+      liveness: () => { throw new Error("BOOM"); },
+    });
+    orch.registerComponent(throwingProbe);
+    // Trigger liveness check to store the error
+    orch.liveness();
+    const s = orch.getHealthStatus();
+    // The error from the liveness check should be visible
+    expect(s.lastError).not.toBe(null);
   });
 });

@@ -154,12 +154,13 @@ export class HealthOrchestrator implements IHealthOrchestrator {
     for (const [, entry] of this._probes) {
       const livenessResult = this._safeProbe(entry.probe.liveness);
       const readinessResult = this._safeProbe(entry.probe.readiness);
+      const componentUptimeS = Math.trunc((Date.now() - entry.registeredAt) / 1000);
       results.push({
         componentId: entry.probe.probeId,
         componentName: entry.probe.componentName,
         liveness: livenessResult,
         readiness: readinessResult,
-        uptimeSeconds: Math.floor((Date.now() - entry.registeredAt) / 1000),
+        uptimeSeconds: componentUptimeS,
         lastError: entry.lastError,
       });
     }
@@ -174,9 +175,7 @@ export class HealthOrchestrator implements IHealthOrchestrator {
     const healthy = components.filter(
       c => c.liveness.ok && c.readiness.ok,
     ).length;
-    const allUnhealthy = components.every(
-      c => !c.liveness.ok || !c.readiness.ok,
-    );
+    const allUnhealthy = components.every(c => !(c.liveness.ok || c.readiness.ok));
 
     if (allUnhealthy) return { status: 'unhealthy', count: total };
     if (healthy === total) return { status: 'healthy', count: total };
@@ -187,7 +186,7 @@ export class HealthOrchestrator implements IHealthOrchestrator {
     const components = this.getComponentHealth();
     const total = components.length;
     const healthy = components.filter(c => c.liveness.ok && c.readiness.ok).length;
-    const allUnhealthy = total > 0 && components.every(c => !c.liveness.ok || !c.readiness.ok);
+    const allUnhealthy = total > 0 && components.every(c => !(c.liveness.ok || c.readiness.ok));
 
     const status: 'healthy' | 'degraded' | 'unhealthy' =
       total === 0 ? 'healthy'
@@ -195,11 +194,13 @@ export class HealthOrchestrator implements IHealthOrchestrator {
           : healthy === total ? 'healthy'
             : 'degraded';
 
-    const lastError = components.find(c => c.lastError !== null)?.lastError ?? null;
+    const errored = components.find(c => c.lastError !== null);
+    const lastError = errored ? errored.lastError : null;
+    const systemUptimeS = Math.trunc((Date.now() - this._startTime) / 1000);
 
     return {
       status,
-      uptimeSeconds: Math.floor((Date.now() - this._startTime) / 1000),
+      uptimeSeconds: systemUptimeS,
       components,
       lastError,
     };

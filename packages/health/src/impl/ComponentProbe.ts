@@ -34,11 +34,14 @@ export function componentProbe(
     startup?: () => ProbeResult;
   },
 ): IHealthProbe {
+  const live = checks.liveness;
+  const ready = checks.readiness ? checks.readiness : live;
+  const started = checks.startup ? checks.startup : ready;
   return {
     probeId,
     componentName,
-    liveness: checks.liveness,
-    readiness: checks.readiness ?? checks.liveness,
-    startup: checks.startup ?? checks.readiness ?? checks.liveness,
+    liveness: live,
+    readiness: ready,
+    startup: started,
   };
 }

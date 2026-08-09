@@ -74,13 +74,18 @@ export class InMemoryBackupManager implements IBackupManager {
       results = results.filter(s => s.type === options.type);
     }
 
-    if (options?.newerThan) {
+    const hasNewerThanFilter = options?.newerThan !== undefined;
+    if (hasNewerThanFilter && options?.newerThan) {
       const newerThanMs = new Date(options.newerThan).getTime();
       results = results.filter(s => new Date(s.createdAt).getTime() > newerThanMs);
     }
 
     // Sort by createdAt descending (newest first)
-    results.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    results.sort((a, b) => {
+      const timeA = new Date(a.createdAt).getTime();
+      const timeB = new Date(b.createdAt).getTime();
+      return timeB - timeA;
+    });
 
     if (options?.limit !== undefined && options.limit > 0) {
       results = results.slice(0, options.limit);

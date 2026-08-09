@@ -7,6 +7,11 @@
 import type { IBackupRetentionPolicy } from '../interfaces/index.js';
 import type { BackupMetadata, RetentionPolicy } from '@agentix-e/db-operations-core/types';
 
+const MILLISECONDS_PER_HOUR = 3_600_000;
+const MILLISECONDS_PER_DAY = 86_400_000;
+const MILLISECONDS_PER_MINUTE = 60_000;
+const MILLISECONDS_PER_SECOND = 1_000;
+
 /**
  * Evaluates which backup snapshots to prune based on a RetentionPolicy.
  *
@@ -109,7 +114,7 @@ function parseDurationToMs(duration: string): number {
     // Fallback: try to parse as a plain number of hours
     const hours = Number(duration);
     if (!Number.isNaN(hours)) {
-      return hours * 3_600_000;
+      return hours * MILLISECONDS_PER_HOUR;
     }
     return 0;
   }
@@ -120,9 +125,9 @@ function parseDurationToMs(duration: string): number {
   const seconds = Number(match[4] ?? 0);
 
   return (
-    days * 86_400_000 +
-    hours * 3_600_000 +
-    minutes * 60_000 +
-    seconds * 1_000
+    days * MILLISECONDS_PER_DAY +
+    hours * MILLISECONDS_PER_HOUR +
+    minutes * MILLISECONDS_PER_MINUTE +
+    seconds * MILLISECONDS_PER_SECOND
   );
 }

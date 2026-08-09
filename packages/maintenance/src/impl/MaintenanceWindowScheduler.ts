@@ -277,16 +277,28 @@ export class MaintenanceWindowScheduler implements IMaintenanceScheduler {
 
   getStats(): MaintenanceSchedulerStats {
     const allInstances = Array.from(this.instances.values());
+    const counts = {
+      active: 0,
+      completed: 0,
+      failed: 0,
+      cancelled: 0,
+      pendingApprovals: 0,
+    };
+    for (const i of allInstances) {
+      if (i.state === "in_progress" || i.state === "scheduled") counts.active++;
+      if (i.state === "completed") counts.completed++;
+      if (i.state === "failed") counts.failed++;
+      if (i.state === "cancelled") counts.cancelled++;
+      if (i.state === "pending") counts.pendingApprovals++;
+    }
     return {
       totalWindows: this.windows.size,
-      activeWindows: allInstances.filter(
-        (i) => i.state === "in_progress" || i.state === "scheduled",
-      ).length,
-      completedInstances: allInstances.filter((i) => i.state === "completed").length,
-      failedInstances: allInstances.filter((i) => i.state === "failed").length,
-      cancelledInstances: allInstances.filter((i) => i.state === "cancelled").length,
-      pendingApprovals: allInstances.filter((i) => i.state === "pending").length,
-      conflictsDetected: 0, // Tracked externally
+      activeWindows: counts.active,
+      completedInstances: counts.completed,
+      failedInstances: counts.failed,
+      cancelledInstances: counts.cancelled,
+      pendingApprovals: counts.pendingApprovals,
+      conflictsDetected: 0,
       conflictsResolved: 0,
     };
   }
@@ -330,7 +342,10 @@ export class MaintenanceWindowScheduler implements IMaintenanceScheduler {
     if (!win.at) return;
     const start = new Date(win.at).getTime();
     if (isNaN(start)) return;
-    if (start >= fromMs && start < toMs) {
+    // Extract interval condition: start is inside [fromMs, toMs)
+    const afterFrom = start >= fromMs;
+    const beforeTo = start < toMs;
+    if (afterFrom && beforeTo) {
       out.push(this._makeOccurrence(win, start));
     }
   }
@@ -344,15 +359,16 @@ export class MaintenanceWindowScheduler implements IMaintenanceScheduler {
     if (!win.startTime) return;
     const [h, m] = win.startTime.split(":").map(Number);
     if (h == null || m == null || isNaN(h) || isNaN(m)) return;
-    const msPerDay = DAY_MS;
 
     let cursor = new Date(fromMs);
     cursor.setUTCHours(h, m, 0, 0);
-    if (cursor.getTime() < fromMs) cursor = new Date(cursor.getTime() + msPerDay);
+    if (cursor.getTime() < fromMs) {
+      cursor = new Date(cursor.getTime() + DAY_MS);
+    }
 
     while (cursor.getTime() < toMs) {
       out.push(this._makeOccurrence(win, cursor.getTime()));
-      cursor = new Date(cursor.getTime() + msPerDay);
+      cursor = new Date(cursor.getTime() + DAY_MS);
     }
   }
 
@@ -461,9 +477,11 @@ export class MaintenanceWindowScheduler implements IMaintenanceScheduler {
   // ── Internal: Helpers ────────────────────────────────────
 
   private _makeOccurrence(win: MaintenanceWindow, start: number): WindowOccurrence {
-    const end = win.maxDurationMin > 0
-      ? start + win.maxDurationMin * MINUTE_MS
-      : start + HOUR_MS;
+    // Compute end as start + duration; default to 1 hour if maxDurationMin ≤ 0
+    const durationMs: number = win.maxDurationMin > 0
+      ? win.maxDurationMin * MINUTE_MS
+      : HOUR_MS;
+    const end = start + durationMs;
     const instanceId = this._nextInstanceId();
     const occ: WindowOccurrence = {
       windowId: win.id,

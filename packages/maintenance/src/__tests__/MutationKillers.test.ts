@@ -294,3 +294,194 @@ describe("M-M: NoopMaintenanceExecutor", () => {
     expect(s).toHaveProperty("threshold");
   });
 });
+
+// ── MaintenanceWindowScheduler Mutation Killers ────────────
+
+import { MaintenanceWindowScheduler } from "../impl/MaintenanceWindowScheduler.js";
+import type { MaintenanceWindow } from "../interfaces/IMaintenanceScheduler.js";
+
+const M_MS = 60_000;
+const H_MS = 3_600_000;
+const D_MS = 86_400_000;
+
+function mkW(overrides: Partial<MaintenanceWindow> = {}): MaintenanceWindow {
+  return {
+    id: overrides.id ?? "win-1",
+    name: overrides.name ?? "test-window",
+    recurrence: overrides.recurrence ?? "daily",
+    startTime: overrides.startTime ?? "03:00",
+    priority: overrides.priority ?? 5,
+    maxDurationMin: overrides.maxDurationMin ?? 60,
+    ...overrides,
+  };
+}
+
+describe("M-M: MaintenanceWindowScheduler", () => {
+  it("MWS1: registerWindow stores window — verify via getStats", () => {
+    const s = new MaintenanceWindowScheduler();
+    s.registerWindow(mkW());
+    expect(s.getStats().totalWindows).toBe(1);
+  });
+
+  it("MWS2: registerWindow throws for empty id/name", () => {
+    const s = new MaintenanceWindowScheduler();
+    expect(() => s.registerWindow({ id: "", name: "", recurrence: "daily", priority: 0, maxDurationMin: 0 })).toThrow();
+  });
+
+  it("MWS3: registerWindow blocks once without 'at'", () => {
+    const s = new MaintenanceWindowScheduler();
+    expect(() => s.registerWindow(mkW({ recurrence: "once" }))).toThrow();
+  });
+
+  it("MWS4: getWindowInstances returns empty for unknown id", () => {
+    const s = new MaintenanceWindowScheduler();
+    expect(s.getWindowInstances("missing")).toEqual([]);
+  });
+
+  it("MWS5: getUpcomingOccurrences once in future", () => {
+    const s = new MaintenanceWindowScheduler();
+    const t = Date.now() + D_MS;
+    s.registerWindow(mkW({ recurrence: "once", at: new Date(t).toISOString() }));
+    const occs = s.getUpcomingOccurrences(t - H_MS, t + D_MS);
+    expect(occs.length).toBe(1);
+  });
+
+  it("MWS6: getUpcomingOccurrences excludes past once", () => {
+    const s = new MaintenanceWindowScheduler();
+    const past = Date.now() - D_MS * 2;
+    s.registerWindow(mkW({ recurrence: "once", at: new Date(past).toISOString() }));
+    expect(s.getUpcomingOccurrences(Date.now(), Date.now() + D_MS).length).toBe(0);
+  });
+
+  it("MWS7: daily recurrence projects multiple", () => {
+    const s = new MaintenanceWindowScheduler();
+    s.registerWindow(mkW({ recurrence: "daily", startTime: "00:00" }));
+    const occs = s.getUpcomingOccurrences(Date.now(), Date.now() + D_MS * 3);
+    expect(occs.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("MWS8: weekly recurrence on today's weekday", () => {
+    const s = new MaintenanceWindowScheduler();
+    const dw = ["sun","mon","tue","wed","thu","fri","sat"][new Date().getDay()] as any;
+    s.registerWindow(mkW({ recurrence: "weekly", startTime: "23:00", daysOfWeek: [dw] }));
+    expect(s.getUpcomingOccurrences(Date.now(), Date.now() + D_MS * 7).length).toBe(1);
+  });
+
+  it("MWS9: monthly recurrence day 15", () => {
+    const s = new MaintenanceWindowScheduler();
+    s.registerWindow(mkW({ recurrence: "monthly", startTime: "06:00", daysOfMonth: [15] }));
+    expect(s.getUpcomingOccurrences(Date.now(), Date.now() + D_MS * 45).length).toBeGreaterThan(0);
+  });
+
+  it("MWS10: cron 8am daily", () => {
+    const s = new MaintenanceWindowScheduler();
+    s.registerWindow(mkW({ recurrence: "cron", cronExpression: "0 8 * * *" }));
+    expect(s.getUpcomingOccurrences(Date.now(), Date.now() + D_MS * 2).length).toBeGreaterThan(0);
+  });
+
+  it("MWS11: approveWindow pending→approved", () => {
+    const s = new MaintenanceWindowScheduler();
+    s.registerWindow(mkW({ requiresApproval: true }));
+    s.getUpcomingOccurrences(Date.now(), Date.now() + D_MS * 2);
+    const insts = s.getWindowInstances("win-1");
+    const p = insts.find(i => i.state === "pending");
+    expect(p).toBeDefined();
+    s.approveWindow(p!.id, "admin");
+    expect(s.getInstanceState(p!.id)?.state).toBe("approved");
+  });
+
+  it("MWS12: cancelWindow pending→cancelled with reason", () => {
+    const s = new MaintenanceWindowScheduler();
+    s.registerWindow(mkW({ requiresApproval: true }));
+    s.getUpcomingOccurrences(Date.now(), Date.now() + D_MS * 2);
+    const p = s.getWindowInstances("win-1").find(i => i.state === "pending");
+    expect(p).toBeDefined();
+    s.cancelWindow(p!.id, "reason-x");
+    const after = s.getInstanceState(p!.id);
+    expect(after?.state).toBe("cancelled");
+    expect(after?.error).toBe("reason-x");
+  });
+
+  it("MWS13: getWindowInstances returns array copies", () => {
+    const s = new MaintenanceWindowScheduler();
+    s.registerWindow(mkW());
+    s.getUpcomingOccurrences(Date.now(), Date.now() + D_MS * 2);
+    const a = s.getWindowInstances("win-1");
+    const b = s.getWindowInstances("win-1");
+    expect(a.length).toBe(b.length);
+    expect(a).not.toBe(b);
+  });
+
+  it("MWS14: getStats accurate counts", () => {
+    const s = new MaintenanceWindowScheduler();
+    s.registerWindow(mkW());
+    s.getUpcomingOccurrences(Date.now(), Date.now() + D_MS * 2);
+    const stats = s.getStats();
+    expect(stats.totalWindows).toBe(1);
+    expect(stats.activeWindows).toBeGreaterThan(0);
+  });
+
+  it("MWS15: resolveConflict defer_lower called without error on non-conflicting", () => {
+    const s = new MaintenanceWindowScheduler();
+    const near = Date.now() + H_MS;
+    s.registerWindow(mkW({ id: "a", priority: 5, recurrence: "once", at: new Date(near).toISOString(), maxDurationMin: 120 }));
+    s.registerWindow(mkW({ id: "b", priority: 10, recurrence: "once", at: new Date(near + M_MS * 30).toISOString(), maxDurationMin: 120 }));
+    s.getUpcomingOccurrences(Date.now(), Date.now() + D_MS);
+    // detectConflicts returns array; resolveConflict called on each
+    const conflicts = s.detectConflicts(Date.now(), Date.now() + D_MS);
+    for (const c of conflicts) {
+      expect(() => s.resolveConflict(c, "defer_lower")).not.toThrow();
+    }
+    // At least one conflict detected
+    expect(conflicts.length).toBeGreaterThan(0);
+  });
+
+  it("MWS16: detectConflicts finds overlapping windows", () => {
+    const s = new MaintenanceWindowScheduler();
+    const near = Date.now() + H_MS;
+    s.registerWindow(mkW({ id: "x", recurrence: "once", at: new Date(near).toISOString(), maxDurationMin: 120 }));
+    s.registerWindow(mkW({ id: "y", recurrence: "once", at: new Date(near + M_MS * 30).toISOString(), maxDurationMin: 120 }));
+    s.getUpcomingOccurrences(Date.now(), Date.now() + D_MS * 2);
+    expect(s.detectConflicts(Date.now(), Date.now() + D_MS * 2).length).toBeGreaterThan(0);
+  });
+
+  it("MWS17: forceStart creates force_override instance", () => {
+    const s = new MaintenanceWindowScheduler();
+    s.registerWindow(mkW({ id: "em", recurrence: "daily", startTime: "00:00" }));
+    const inst = s.forceStart("em");
+    expect(inst.state).toBe("force_override");
+    const stored = s.getInstanceState(inst.id);
+    expect(stored?.state).toBe("force_override");
+  });
+
+  it("MWS18: requestPause calls onPaused for each resource", async () => {
+    const s = new MaintenanceWindowScheduler();
+    const paused: string[] = [];
+    await s.requestPause({
+      windowId: "w", reason: "test", resources: ["r1","r2"],
+      onPaused: async (r) => { paused.push(r); },
+    });
+    expect(paused).toEqual(["r1","r2"]);
+  });
+
+  it("MWS19: resolveConflict allow_both keeps both active", () => {
+    const s = new MaintenanceWindowScheduler();
+    const near = Date.now() + H_MS;
+    s.registerWindow(mkW({ id: "a2", priority: 5, recurrence: "once", at: new Date(near).toISOString(), maxDurationMin: 120 }));
+    s.registerWindow(mkW({ id: "b2", priority: 10, recurrence: "once", at: new Date(near + M_MS * 30).toISOString(), maxDurationMin: 120 }));
+    s.getUpcomingOccurrences(Date.now(), Date.now() + D_MS);
+    for (const c of s.detectConflicts(Date.now(), Date.now() + D_MS)) {
+      s.resolveConflict(c, "allow_both");
+    }
+    expect(s.getWindowInstances("a2").some(i => i.state !== "cancelled")).toBe(true);
+    expect(s.getWindowInstances("b2").some(i => i.state !== "cancelled")).toBe(true);
+  });
+
+  it("MWS20: checkConflict on identical interval returns hasConflict=true", () => {
+    const s = new MaintenanceWindowScheduler();
+    const t = Date.now();
+    const a = { windowId: "w", instanceId: "i1", start: t, end: t + H_MS, recurrence: "once" as const, priority: 1 };
+    const b = { windowId: "w2", instanceId: "i2", start: t, end: t + H_MS, recurrence: "once" as const, priority: 1 };
+    expect(s.checkConflict(a, b).hasConflict).toBe(true);
+  });
+});

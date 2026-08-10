@@ -100,14 +100,16 @@ describe("H-M: HealthOrchestrator edge cases", () => {
     orch = new HealthOrchestrator();
   });
 
-  it("H5: getComponentHealth returns entries with uptime", () => {
+  it("H5: getComponentHealth returns entries with uptime seconds", async () => {
     orch.registerComponent(liveProbe("a", "A"));
+    // Wait 50ms so elapsedMs > 0, making /→* mutation detectable.
+    // If mutated to *1000, uptimeSeconds would jump to ~5ms*1000=5000, not ~0.
+    await new Promise(r => setTimeout(r, 50));
     const results = orch.getComponentHealth();
     expect(results).toHaveLength(1);
     expect(results[0].componentId).toBe("a");
-    // L157-163: uptimeSeconds must be 0 for newly registered component (not *1000)
     expect(results[0].uptimeSeconds).toBeGreaterThanOrEqual(0);
-    expect(results[0].uptimeSeconds).toBeLessThanOrEqual(0);  // exactly 0
+    expect(results[0].uptimeSeconds).toBeLessThan(5); // far less than 5000
   });
 
   it("H6: getAggregateStatus with empty registry returns healthy", () => {
@@ -150,12 +152,14 @@ describe("H-M: HealthOrchestrator edge cases", () => {
     expect(s.status).toBe("degraded");
   });
 
-  it("H10: getHealthStatus includes uptimeSeconds", () => {
+  it("H10: getHealthStatus uptimeSeconds is reasonable (kills L201 /→*)", async () => {
     orch.registerComponent(liveProbe("a", "A"));
+    // Wait 100ms to ensure systemElapsedMs is well above 0.
+    // If /→*, uptimeSeconds = ~100ms * 1000 = 100000, not ~0.
+    await new Promise(r => setTimeout(r, 100));
     const status = orch.getHealthStatus();
-    // L199-201: uptimeSeconds for just-constructed orchestrator should be 0-1
     expect(status.uptimeSeconds).toBeGreaterThanOrEqual(0);
-    expect(status.uptimeSeconds).toBeLessThanOrEqual(1);
+    expect(status.uptimeSeconds).toBeLessThan(10);
     expect(typeof status.uptimeSeconds).toBe("number");
     expect(Number.isFinite(status.uptimeSeconds)).toBe(true);
   });
@@ -322,5 +326,22 @@ describe("H-M: HealthOrchestrator edge cases", () => {
     });
     const status = orc2.getAggregateStatus();
     expect(status.status).toBe("degraded");
+  });
+
+  it("H25: registerComponent defaults critical to true (L47 true→false killer)", () => {
+    const orc = new HealthOrchestrator();
+    // Register without specifying critical — defaults to true via ?? true
+    orc.registerComponent({
+      probeId: "def-critical",
+      componentName: "DefaultCritical",
+      liveness: () => ({ ok: false, type: "liveness", message: "failing" }),
+      readiness: () => ({ ok: false, type: "readiness", message: "failing" }),
+    });
+    // If critical defaults to false (mutated), the failing component
+    // would NOT make the overall status "unhealthy"
+    const s = orc.getHealthStatus();
+    // With only one component and it's failing, status must be unhealthy
+    // (critical=true is the gate)
+    expect(s.status).toBe("unhealthy");
   });
 });

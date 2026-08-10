@@ -154,7 +154,8 @@ export class HealthOrchestrator implements IHealthOrchestrator {
     for (const [, entry] of this._probes) {
       const livenessResult = this._safeProbe(entry.probe.liveness);
       const readinessResult = this._safeProbe(entry.probe.readiness);
-      const componentUptimeS = Math.trunc((Date.now() - entry.registeredAt) / 1000);
+      const elapsedMs = Date.now() - entry.registeredAt;
+    const componentUptimeS = Math.trunc(elapsedMs / 1000);
       results.push({
         componentId: entry.probe.probeId,
         componentName: entry.probe.componentName,
@@ -196,7 +197,8 @@ export class HealthOrchestrator implements IHealthOrchestrator {
 
     const errored = components.find(c => c.lastError !== null);
     const lastError = errored ? errored.lastError : null;
-    const systemUptimeS = Math.trunc((Date.now() - this._startTime) / 1000);
+    const systemElapsedMs = Date.now() - this._startTime;
+    const systemUptimeS = Math.trunc(systemElapsedMs / 1000);
 
     return {
       status,

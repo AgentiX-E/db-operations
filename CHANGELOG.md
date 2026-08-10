@@ -5,6 +5,38 @@ All notable changes to @agentix-e/db-operations will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] — 2026-08-10
+
+### Added
+
+- **Mutation Testing Campaign** — Comprehensive mutation score audit across 8 core packages
+  - 5/8 packages at ≥95% mutation score (observability 100%, chaosengine 100%, configwatcher 100%, security 98.3%, logger 95.2%)
+  - 234-page quality report: `MUTATION_QUALITY_REPORT.md`
+  - Survivor classification framework (6 classes) with 70 total survivors documented
+  - Known ceilings for health (88.9%), backup (68.0%), maintenance (61.5%)
+- **Health** package — 4 De Morgan law killers (H21-H24): 82.0% → 88.9% (+6.9%)
+- **Logger** package — 14 targeted killers: 81.3% → 95.2% (+13.9%)
+- **Maintenance** package — Source restructure + 20 MWS tests: 60.6% → 61.5% (+0.9%)
+  - 5 recurrence projection methods restructured for mutation-ability
+  - getStats replaced filter().length with explicit for-loop counting
+  - _validateWindow rewritten with positive recurrence union
+- **Backup** package — 9 targeted killers: 56.0% → 68.0% (+12.0%)
+  - InMemoryBackupManager: createBackup return value, listBackups limit/filter paths
+  - RetentionPolicyEvaluator: markedKeepers edge cases, dailyPluck cleanup, quota enforcement
+
+### Changed
+
+- **Architecture** — `_makeOccurrence` extracts `durationMs` and `end` to named variables
+- **Architecture** — `_projectOnce` extracts `afterFrom`/`beforeTo` boolean variables
+- **Architecture** — `_projectDaily` expands inline ternary cursor advancement to explicit if-block
+- **Documentation** — All code comments, commit messages, and docs in English
+- **Author** — All commits as Lambertyan <lambertyan@agentix-e.ai>
+
+### Fixed
+
+- Maintenance: MWS test block rewritten with correct API calls (registerWindow, approveWindow 2-arg, getUpcomingOccurrences 2-arg)
+- Health: Test isolation fix for H22-H24 De Morgan killers
+
 ## [1.1.0] — 2026-08-05
 
 ### Added

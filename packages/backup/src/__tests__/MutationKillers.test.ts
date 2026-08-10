@@ -9,7 +9,7 @@
  *
  * Target: 66.7% → ≥95% mutation score.
  */
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { BackupVerifier } from "../impl/BackupVerifier.js";
 import { InMemoryBackupManager } from "../impl/InMemoryBackupManager.js";
 import { InMemoryStorageBackend } from "../impl/InMemoryStorageBackend.js";
@@ -69,75 +69,132 @@ describe("B-M: BackupVerifier", () => {
   });
 });
 
-// ── InMemoryBackupManager (L63, L77-L83) ─────────────
+// ── InMemoryBackupManager (L63, L77-L83) ──
+// Strategy: Use vi.useFakeTimers to freeze time and advance it between
+// createBackup calls, producing deterministic createdAt timestamps that
+// exercise the sort comparator (L63 `-`→`+`), the filter predicates
+// (L79 `&&`→`||`, L80 `>`→`<=`, L81 `<`→`>=`), and the newerThan guard
+// (L82 `-`→`+`, `+`→`-`).
 
-describe("B-M: InMemoryBackupManager listBackups sort/filter", () => {
+describe("B-M: InMemoryBackupManager sort/filter (faketimer)", () => {
   let manager: InMemoryBackupManager;
   let storage: InMemoryStorageBackend;
   let retention: RetentionPolicyEvaluator;
 
-  beforeEach(async () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-10T12:00:00.000Z"));
     storage = new InMemoryStorageBackend();
     retention = new RetentionPolicyEvaluator({ maxFullSnapshots: 10, maxTotalBytes: 1_000_000_000 });
     manager = new InMemoryBackupManager(storage, retention);
-    // Create snapshots in non-chronological order
-    await manager.createBackup({ type: "full" });
-    await new Promise((r) => setTimeout(r, 5));
-    await manager.createBackup({ type: "full" });
-    await new Promise((r) => setTimeout(r, 5));
-    await manager.createBackup({ type: "full" });
   });
 
-  it("B4: listBackups returns newest first (descending)", async () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("B4: listBackups returns newest first — kills L63 sort comparator `-`→`+`", async () => {
+    // Create 5 snapshots, each 10s apart.
+    // Must advance clock + flush timers for each createBackup since
+    // simulateWork uses setTimeout internally.
+    for (let i = 0; i < 5; i++) {
+      const p = manager.createBackup({ type: "full" });
+      vi.advanceTimersByTime(10_000);
+      await p;
+    }
     const items = await manager.listBackups({});
-    expect(items.length).toBeGreaterThanOrEqual(3);
-    // Verify strict descending order by ID, since IDs are embedded with timestamp order
-    for (let i = 1; i < items.length; i++) {
-      const prev = new Date(items[i - 1].createdAt).getTime();
-      const curr = new Date(items[i].createdAt).getTime();
-      expect(prev).toBeGreaterThanOrEqual(curr);
+    expect(items.length).toBe(5);
+    const times = items.map((s) => new Date(s.createdAt).getTime());
+    for (let i = 1; i < times.length; i++) {
+      expect(times[i - 1]).toBeGreaterThan(times[i]);
     }
   });
 
-  it("B4b: listBackups sort direction — first is newest", async () => {
-    // If sort `-` is mutated to `+`, the oldest would come first
-    const items = await manager.listBackups({});
-    expect(items.length).toBeGreaterThanOrEqual(3);
-    const times = items.map((s) => new Date(s.createdAt).getTime());
-    // A descending-sorted array: first element >= last element
-    expect(times[0]).toBeGreaterThanOrEqual(times[times.length - 1]);
-  });
-
-  it("B5: listBackups with limit truncates results", async () => {
+  it("B5: listBackups with limit respects slice boundary — kills L77 limit guard", async () => {
+    for (let i = 0; i < 5; i++) {
+      const p = manager.createBackup({ type: "full" });
+      vi.advanceTimersByTime(10_000);
+      await p;
+    }
     const items = await manager.listBackups({ limit: 2 });
     expect(items).toHaveLength(2);
   });
 
-  it("B6: listBackups with type filter returns only matching", async () => {
-    await manager.createBackup({ type: "incremental" });
+  it("B6: listBackups with type filter only matches — kills L79 `&&`→`||`", async () => {
+    let p = manager.createBackup({ type: "full" });
+    vi.advanceTimersByTime(10_000);
+    await p;
+    p = manager.createBackup({ type: "incremental" });
+    vi.advanceTimersByTime(10_000);
+    await p;
+
     const fulls = await manager.listBackups({ type: "full" });
     expect(fulls.every((s) => s.type === "full")).toBe(true);
+    expect(fulls.length).toBe(1);
+
     const incs = await manager.listBackups({ type: "incremental" });
-    expect(incs.length).toBeGreaterThanOrEqual(1);
     expect(incs.every((s) => s.type === "incremental")).toBe(true);
+    expect(incs.length).toBe(1);
   });
 
-  it("B7: listBackups with newerThan filters correctly", async () => {
-    const cutoff = new Date(Date.now() - 60_000).toISOString(); // 1 min ago
-    const items = await manager.listBackups({ newerThan: cutoff });
-    // All snapshots were created within the last few seconds, should all pass
-    expect(items.length).toBeGreaterThanOrEqual(3);
-  });
+  it("B7: listBackups newerThan filter correctly — kills L80 `>`→`<=`", async () => {
+    let p = manager.createBackup({ type: "full" });
+    vi.advanceTimersByTime(10_000);
+    await p;
+    p = manager.createBackup({ type: "full" });
+    vi.advanceTimersByTime(10_000);
+    await p;
 
-  it("B8: listBackups newerThan excludes old snapshots", async () => {
     const allItems = await manager.listBackups({});
-    // Use a cutoff in the far future — nothing should match
-    const futureCutoff = new Date(Date.now() + 86_400_000).toISOString();
-    const items = await manager.listBackups({ newerThan: futureCutoff });
-    expect(items).toHaveLength(0);
+    const olderTs = new Date(allItems[1].createdAt).getTime();
+    const cutoff = new Date(olderTs + 1).toISOString();
+    const filtered = await manager.listBackups({ newerThan: cutoff });
+    expect(filtered.length).toBe(1);
+    expect(filtered.every((s) =>
+      new Date(s.createdAt).getTime() > new Date(cutoff).getTime()
+    )).toBe(true);
   });
 
-  it("B9: deleteBackup removes and returns true", async () => {
+  it("B8: listBackups newerThan strict boundary — kills L80 `>`→`>=`", async () => {
+    let p = manager.createBackup({ type: "full" });
+    vi.advanceTimersByTime(10_000);
+    await p;
+    p = manager.createBackup({ type: "full" });
+    vi.advanceTimersByTime(10_000);
+    await p;
+
+    const allItems = await manager.listBackups({});
+    const olderTs = new Date(allItems[1].createdAt).getTime();
+    const exactCutoff = new Date(olderTs).toISOString();
+    const result = await manager.listBackups({ newerThan: exactCutoff });
+    // Strict `>` — exact-match snapshot NOT included
+    expect(result.some((s) => new Date(s.createdAt).getTime() === olderTs)).toBe(false);
+  });
+
+  it("B9: listBackups with future newerThan returns empty — kills L82 `+`→`-`", async () => {
+    let p = manager.createBackup({ type: "full" });
+    vi.advanceTimersByTime(10_000);
+    await p;
+
+    const future = new Date(Date.now() + 86_400_000 * 7).toISOString();
+    const result = await manager.listBackups({ newerThan: future });
+    expect(result).toHaveLength(0);
+  });
+
+  it("B10: listBackups with past newerThan returns all — kills L81 `<`→`>=`", async () => {
+    let p = manager.createBackup({ type: "full" });
+    vi.advanceTimersByTime(10_000);
+    await p;
+
+    const past = new Date(Date.now() - 86_400_000).toISOString();
+    const result = await manager.listBackups({ newerThan: past });
+    expect(result.length).toBeGreaterThanOrEqual(1);
+  });
+
+  // ── Legacy tests kept for compatibility (no faketimer) ──
+  it("B11: deleteBackup removes and returns true", async () => {
+    vi.advanceTimersByTime(10_000);
+    await manager.createBackup({ type: "full" });
     const items = await manager.listBackups({});
     const id = items[0].snapshotId;
     const result = await manager.deleteBackup(id);
@@ -146,19 +203,36 @@ describe("B-M: InMemoryBackupManager listBackups sort/filter", () => {
     expect(remaining.some((s) => s.snapshotId === id)).toBe(false);
   });
 
-  it("B10: deleteBackup nonexistent returns false", async () => {
+  it("B12: deleteBackup nonexistent returns false", async () => {
     const result = await manager.deleteBackup("nonexistent");
     expect(result).toBe(false);
   });
 
-  it("B11: restoreFromSnapshot returns the snapshot", async () => {
+  it("B13: getBackup returns snapshot by ID", async () => {
+    vi.advanceTimersByTime(10_000);
+    await manager.createBackup({ type: "full" });
+    const items = await manager.listBackups({});
+    const id = items[0].snapshotId;
+    const snap = await manager.getBackup(id);
+    expect(snap).toBeDefined();
+    expect(snap!.snapshotId).toBe(id);
+  });
+
+  it("B14: getBackup nonexistent returns null", async () => {
+    const snap = await manager.getBackup("nonexistent");
+    expect(snap).toBeNull();
+  });
+
+  it("B15: restoreFromSnapshot returns the snapshot", async () => {
+    vi.advanceTimersByTime(10_000);
+    await manager.createBackup({ type: "full" });
     const items = await manager.listBackups({});
     const id = items[0].snapshotId;
     const result = await manager.restoreFromSnapshot(id);
     expect(result.success).toBe(true);
   });
 
-  it("B12: restoreFromSnapshot nonexistent fails", async () => {
+  it("B16: restoreFromSnapshot nonexistent returns failure", async () => {
     const result = await manager.restoreFromSnapshot("nonexistent");
     expect(result.success).toBe(false);
   });

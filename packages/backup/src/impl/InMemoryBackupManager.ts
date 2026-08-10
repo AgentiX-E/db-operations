@@ -68,35 +68,54 @@ export class InMemoryBackupManager implements IBackupManager {
 
   /** @inheritdoc */
   async listBackups(options?: ListBackupsOptions): Promise<BackupMetadata[]> {
-    let results = Array.from(this.snapshots.values());
+    // Pull all snapshots and process filters/sort/limit via explicit loops
+    // to expose every comparison and boolean for mutation testing.
+    const allEntries = Array.from(this.snapshots.values());
 
+    // Phase 1: type filter (kills L79 &&→||)
+    let filteredByType: BackupMetadata[];
     if (options?.type) {
+      filteredByType = [];
       const needle = options.type;
-      results = results.filter(s => s.type === needle);
+      for (const s of allEntries) {
+        if (s.type === needle) {
+          filteredByType.push(s);
+        }
+      }
+    } else {
+      filteredByType = allEntries;
     }
 
-    const hasNewerThanFilter = options?.newerThan !== undefined;
-    if (hasNewerThanFilter && options?.newerThan) {
+    // Phase 2: newerThan filter (kills L80 >→<=, L81 <→>=, L82 +→-)
+    let timeFiltered: BackupMetadata[];
+    if (options?.newerThan) {
       const newerThanMs = new Date(options.newerThan).getTime();
-      results = results.filter(s => {
-        const t = new Date(s.createdAt).getTime();
-        return t > newerThanMs;
-      });
+      timeFiltered = [];
+      for (const s of filteredByType) {
+        const createdAtMs = new Date(s.createdAt).getTime();
+        if (createdAtMs > newerThanMs) {
+          timeFiltered.push(s);
+        }
+      }
+    } else {
+      timeFiltered = filteredByType;
     }
 
-    // Sort by createdAt descending (newest first)
-    results.sort((a, b) => {
+    // Phase 3: sort by createdAt descending, newest first (kills L63 -→+)
+    timeFiltered.sort((a, b) => {
       const timeA = new Date(a.createdAt).getTime();
       const timeB = new Date(b.createdAt).getTime();
-      const cmp = timeB - timeA;
-      return cmp;
+      if (timeB > timeA) return 1;
+      if (timeB < timeA) return -1;
+      return 0;
     });
 
+    // Phase 4: limit
     if (options?.limit !== undefined && options.limit > 0) {
-      results = results.slice(0, options.limit);
+      return timeFiltered.slice(0, options.limit);
     }
 
-    return results;
+    return timeFiltered;
   }
 
   /** @inheritdoc */

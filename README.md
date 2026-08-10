@@ -2,6 +2,8 @@
 
 **A production-grade, engine-agnostic operations abstraction layer — 20 packages, 866 tests.**
 
+**Mutation Score:** 85.2% weighted average across audited packages ([full report →](MUTATION_QUALITY_REPORT.md))
+
 Replace ad-hoc `ops/` directories with a canonical interface suite that every database
 engine implements via adapters.
 

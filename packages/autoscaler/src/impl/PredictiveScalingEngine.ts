@@ -76,10 +76,11 @@ export class PredictiveScalingEngine implements IAutoScaler {
   registerPolicy(policy: ScalingPolicy): void {
     this.policy = { ...policy };
     // Clamp current count to new policy bounds
-    this.currentCount = Math.max(
+    const clamped = Math.max(
       this.policy.minNodes,
-      Math.min(this.policy.maxNodes, this.currentCount),
+      this.currentCount,
     );
+    this.currentCount = Math.min(this.policy.maxNodes, clamped);
   }
 
   getPolicy(): ScalingPolicy | null {
@@ -93,7 +94,10 @@ export class PredictiveScalingEngine implements IAutoScaler {
     const now = Date.now();
 
     // --- Evaluation interval guard ---
-    if (now - this.cooldown.lastEvaluationAt < this.policy.evaluationIntervalMs) {
+    const elapsed = now - this.cooldown.lastEvaluationAt;
+    const evalInterval = this.policy.evaluationIntervalMs;
+    const withinInterval = elapsed < evalInterval;
+    if (withinInterval) {
       return null;
     }
     this.cooldown.lastEvaluationAt = now;
@@ -131,10 +135,11 @@ export class PredictiveScalingEngine implements IAutoScaler {
     }
 
     // --- Compute scaled amount ---
+    const isScaleUp = scaleReason.direction === "up";
     let direction: ScaleDirection;
     let rawAmount: number;
 
-    if (scaleReason.direction === "up") {
+    if (isScaleUp) {
       if (!canScaleUp) return null;
       direction = "scale_up";
       // Gradient: how far from target, normalized
@@ -147,14 +152,15 @@ export class PredictiveScalingEngine implements IAutoScaler {
 
     // --- Apply strategy modifier ---
     const modifier = STRATEGY_MODIFIERS[this.policy.strategy];
-    const modifierFactor = direction === "scale_up" ? modifier.up : modifier.down;
+    const isScaleUpDir = direction === "scale_up";
+    const modifierFactor = isScaleUpDir ? modifier.up : modifier.down;
     const modifiedAmount = Math.round(rawAmount * modifierFactor);
 
     const amount = Math.max(1, modifiedAmount);
 
     // --- Calculate target count with bounds ---
     let targetCount: number;
-    if (direction === "scale_up") {
+    if (isScaleUpDir) {
       targetCount = currentNodeCount + amount;
       // Apply over-provisioning
       targetCount = Math.ceil(targetCount * this.policy.overProvisionFactor);
@@ -165,7 +171,8 @@ export class PredictiveScalingEngine implements IAutoScaler {
     }
 
     // --- Guard: don't scale to the same count ---
-    if (targetCount === currentNodeCount) return null;
+    const sameCount = targetCount === currentNodeCount;
+    if (sameCount) return null;
 
     // --- Build action ---
     const action: ScaleAction = {
@@ -268,7 +275,7 @@ export class PredictiveScalingEngine implements IAutoScaler {
 
   getStats(): ScalingStats {
     const scaleUps = this.history.filter((e) => e.action.action === "scale_up").length;
-    const scaleDowns = this.history.filter((e) => e.action.action !== "scale_down").length;
+    const scaleDowns = this.history.filter((e) => e.action.action === "scale_down").length;
 
     let avgInterval = 0;
     if (this.history.length >= 2) {
@@ -313,13 +320,22 @@ export class PredictiveScalingEngine implements IAutoScaler {
     canScaleDown: boolean,
   ): { direction: "up" | "down"; severity: number } | null {
     const cpu = this._predictMetric("cpu", metrics.cpu);
-    const gap = cpu - this.policy.cpuTarget;
+    const cpuTarget = this.policy.cpuTarget;
+    const gap = cpu - cpuTarget;
 
-    if (gap > 0 && canScaleUp) {
-      return { direction: "up", severity: gap * 10 }; // 0.1 above target → 1 node
+    const cpuTooHigh = gap > 0;
+    const canUpScale = cpuTooHigh && canScaleUp;
+    if (canUpScale) {
+      const severity = gap * 10; // 0.1 above target → 1 node
+      return { direction: "up", severity };
     }
-    if (gap < -0.2 && canScaleDown && metrics.cpu < 0.3) {
-      return { direction: "down", severity: Math.abs(gap) * 5 };
+
+    const cpuWellBelow = gap < -0.2;
+    const cpuLowEnough = metrics.cpu < 0.3;
+    const canDownScale = cpuWellBelow && cpuLowEnough && canScaleDown;
+    if (canDownScale) {
+      const severity = Math.abs(gap) * 5;
+      return { direction: "down", severity };
     }
     return null;
   }
@@ -331,13 +347,21 @@ export class PredictiveScalingEngine implements IAutoScaler {
   ): { direction: "up" | "down"; severity: number } | null {
     const memoryTarget = this.policy.memoryTarget;
     const actualMemory = metrics.memory;
-    if (memoryTarget === undefined || actualMemory === undefined) return null;
+    const noTarget = memoryTarget === undefined;
+    const noMemory = actualMemory === undefined;
+    if (noTarget || noMemory) return null;
 
     const gap = actualMemory - memoryTarget;
-    if (gap > 0 && canScaleUp) {
+
+    const overTarget = gap > 0;
+    const canUp = overTarget && canScaleUp;
+    if (canUp) {
       return { direction: "up", severity: gap * 10 };
     }
-    if (gap < -0.3 && canScaleDown) {
+
+    const wellBelow = gap < -0.3;
+    const canDown = wellBelow && canScaleDown;
+    if (canDown) {
       return { direction: "down", severity: Math.abs(gap) * 3 };
     }
     return null;
@@ -356,12 +380,17 @@ export class PredictiveScalingEngine implements IAutoScaler {
     const capacity = currentNodeCount * qpsPerNode;
     const utilization = currentQPS / capacity;
 
-    if (utilization > 0.85 && canScaleUp) {
-      // Scale up: need enough nodes to bring utilization to 70%
+    const overutilized = utilization > 0.85;
+    const canUp = overutilized && canScaleUp;
+    if (canUp) {
       const targetNodes = Math.ceil(currentQPS / (qpsPerNode * 0.7));
       return { direction: "up", severity: targetNodes - currentNodeCount };
     }
-    if (utilization < 0.3 && canScaleDown && currentNodeCount > this.policy.minNodes) {
+
+    const underutilized = utilization < 0.3;
+    const aboveMin = currentNodeCount > this.policy.minNodes;
+    const canDown = underutilized && aboveMin && canScaleDown;
+    if (canDown) {
       return { direction: "down", severity: 1 };
     }
     return null;
@@ -375,7 +404,8 @@ export class PredictiveScalingEngine implements IAutoScaler {
     if (!threshold) return null;
 
     const excess = metrics.latencyP95 - threshold;
-    if (excess > 0 && canScaleUp) {
+    const overThreshold = excess > 0;
+    if (overThreshold && canScaleUp) {
       // Severity: each 100ms excess → 1 node
       return { direction: "up", severity: Math.ceil(excess / 100) };
     }
@@ -394,11 +424,17 @@ export class PredictiveScalingEngine implements IAutoScaler {
     const capacity = currentNodeCount * connPerNode;
     const utilization = metrics.connectionCount / capacity;
 
-    if (utilization > 0.8 && canScaleUp) {
+    const overutilized = utilization > 0.8;
+    const canUp = overutilized && canScaleUp;
+    if (canUp) {
       const targetNodes = Math.ceil(metrics.connectionCount / (connPerNode * 0.7));
       return { direction: "up", severity: targetNodes - currentNodeCount };
     }
-    if (utilization < 0.3 && canScaleDown && currentNodeCount > this.policy.minNodes) {
+
+    const underutilized = utilization < 0.3;
+    const aboveMin = currentNodeCount > this.policy.minNodes;
+    const canDown = underutilized && aboveMin && canScaleDown;
+    if (canDown) {
       return { direction: "down", severity: 1 };
     }
     return null;
@@ -505,14 +541,22 @@ export class PredictiveScalingEngine implements IAutoScaler {
     const sumXY = points.reduce((s, p) => s + p.x * p.y, 0);
     const sumX2 = points.reduce((s, p) => s + p.x * p.x, 0);
 
-    const denominator = n * sumX2 - sumX * sumX;
-    if (denominator === 0) return current;
+    const nTimesSumX2 = n * sumX2;
+    const sumXTimesSumX = sumX * sumX;
+    const denominator = nTimesSumX2 - sumXTimesSumX;
+    const isZeroDenominator = denominator === 0;
+    if (isZeroDenominator) return current;
 
-    const a = (n * sumXY - sumX * sumY) / denominator; // slope
-    const b = (sumY - a * sumX) / n;                    // intercept
+    const nTimesSumXY = n * sumXY;
+    const sumXTimesSumY = sumX * sumY;
+    const numeratorA = nTimesSumXY - sumXTimesSumY;
+    const a = numeratorA / denominator; // slope
+    const aTimesSumX = a * sumX;
+    const b = (sumY - aTimesSumX) / n;   // intercept
 
     // Predict next point
-    const predicted = a * n + b;
+    const aTimesN = a * n;
+    const predicted = aTimesN + b;
 
     // For scaling: use the more aggressive value (predicting growth, respond to current)
     return Math.max(current, predicted);
@@ -525,24 +569,34 @@ export class PredictiveScalingEngine implements IAutoScaler {
     let confidence = 0.5;
 
     // CPU far from target → higher confidence
-    const cpuDeviation = Math.abs(metrics.cpu - this.policy.cpuTarget);
-    confidence += cpuDeviation * 0.3;
+    const cpuTarget = this.policy.cpuTarget;
+    const cpuDeviation = Math.abs(metrics.cpu - cpuTarget);
+    confidence = confidence + cpuDeviation * 0.3;
 
     // High QPS → higher confidence
-    if (this.policy.qpsPerNode && metrics.qps > 0) {
-      const capacity = this.currentCount * this.policy.qpsPerNode;
-      if (capacity > 0) {
+    const hasQPS = this.policy.qpsPerNode !== undefined;
+    const positiveQPS = metrics.qps > 0;
+    if (hasQPS && positiveQPS) {
+      const qpsPerNode = this.policy.qpsPerNode!;
+      const capacity = this.currentCount * qpsPerNode;
+      const positiveCapload = capacity > 0;
+      if (positiveCapload) {
         const qpsUtilization = metrics.qps / capacity;
-        confidence += Math.max(0, qpsUtilization - 0.7) * 0.4;
+        const utilizationAbovePoint7 = qpsUtilization - 0.7;
+        const boost = Math.max(0, utilizationAbovePoint7) * 0.4;
+        confidence = confidence + boost;
       }
     }
 
     // Predictive model confidence
-    if (this.policy.predictiveScaling && this.metricsHistory.length >= 3) {
-      confidence += 0.15;
+    const predictiveEnabled = this.policy.predictiveScaling;
+    const enoughHistory = this.metricsHistory.length >= 3;
+    if (predictiveEnabled && enoughHistory) {
+      confidence = confidence + 0.15;
     }
 
-    return Math.min(1.0, Math.max(0.0, confidence));
+    const clamped = Math.max(0.0, confidence);
+    return Math.min(1.0, clamped);
   }
 
   private _recordNoise(metrics: AutoScalerMetrics, now: number): void {

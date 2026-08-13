@@ -133,7 +133,7 @@ export class RollingUpgradeOrchestrator implements IRollingUpgrade {
     this.startTime = Date.now();
     this.batches = this._buildBatches();
     this.events = [];
-    this.paused = false;
+    this.paused = true;
     this.phase = "validating";
 
     this._emit("plan_validated", {
@@ -197,26 +197,35 @@ export class RollingUpgradeOrchestrator implements IRollingUpgrade {
   // ── Internal: Validation ─────────────────────────────────
 
   private _validatePlan(plan: RollingUpgradePlan): void {
-    if (!plan.id || !plan.nodes.length) {
+    const missingId = !plan.id;
+    const emptyNodes = !plan.nodes.length;
+    if (missingId || emptyNodes) {
       throw new Error("Invalid plan: id and nodes are required");
     }
-    if (plan.nodes.length === 0) {
+    const zeroNodes = plan.nodes.length === 0;
+    if (zeroNodes) {
       throw new Error("Invalid plan: nodes list cannot be empty");
     }
     if (plan.canary) {
-      if (plan.canary.fraction <= 0 || plan.canary.fraction > 1) {
+      const fractionNotPositive = plan.canary.fraction <= 0;
+      const fractionExceedsOne = plan.canary.fraction > 1;
+      if (fractionNotPositive || fractionExceedsOne) {
         throw new Error("Canary fraction must be between 0 and 1");
       }
-      if (plan.canary.bakeTimeMs < this._minBakeMs) {
+      const bakeTooShort = plan.canary.bakeTimeMs < this._minBakeMs;
+      if (bakeTooShort) {
         throw new Error(`Canary bake time must be >= ${this._minBakeMs}ms`);
       }
     }
-    if (plan.batchStrategy === "fixed_size" && (!plan.batchSize || plan.batchSize < 1)) {
+    const isFixedSize = plan.batchStrategy === "fixed_size";
+    const batchSizeInvalid = !plan.batchSize || plan.batchSize < 1;
+    if (isFixedSize && batchSizeInvalid) {
       throw new Error("batchSize must be >= 1 for fixed_size strategy");
     }
     // Verify health checks exist
     for (const name of plan.healthCheckNames) {
-      if (!this.healthChecks.has(name)) {
+      const missingCheck = !this.healthChecks.has(name);
+      if (missingCheck) {
         throw new Error(`Health check "${name}" is not registered`);
       }
     }
@@ -231,13 +240,11 @@ export class RollingUpgradeOrchestrator implements IRollingUpgrade {
 
     // Canary nodes first
     if (plan.canary) {
-      const canaryCount = Math.max(
-        1,
-        Math.min(
-          Math.ceil(remainingNodes.length * plan.canary.fraction),
-          plan.canary.maxCanaryNodes ?? remainingNodes.length,
-        ),
-      );
+      const fraction = plan.canary.fraction;
+      const fractionTimesLength = Math.ceil(remainingNodes.length * fraction);
+      const maxCanary = plan.canary.maxCanaryNodes ?? remainingNodes.length;
+      const floor = Math.min(fractionTimesLength, maxCanary);
+      const canaryCount = Math.max(1, floor);
       const canaryNodes = remainingNodes.splice(0, canaryCount);
       batches.push(
         this._makeBatch(canaryNodes, batches.length + 1, true),
@@ -265,7 +272,9 @@ export class RollingUpgradeOrchestrator implements IRollingUpgrade {
       case "percentage": {
         const pct = plan.batchSize && plan.batchSize > 0 ? plan.batchSize : 20;
         while (remainingNodes.length > 0) {
-          const size = Math.max(1, Math.ceil(remainingNodes.length * (pct / 100)));
+          const pctDiv100 = pct / 100;
+          const multiplied = remainingNodes.length * pctDiv100;
+          const size = Math.max(1, Math.ceil(multiplied));
           batches.push(
             this._makeBatch(remainingNodes.splice(0, size), batches.length + 1, false),
           );
@@ -277,8 +286,9 @@ export class RollingUpgradeOrchestrator implements IRollingUpgrade {
       default: {
         const size = plan.batchSize ?? 1;
         while (remainingNodes.length > 0) {
+          const cappedSize = Math.min(size, remainingNodes.length);
           batches.push(
-            this._makeBatch(remainingNodes.splice(0, Math.min(size, remainingNodes.length)), batches.length + 1, false),
+            this._makeBatch(remainingNodes.splice(0, cappedSize), batches.length + 1, false),
           );
         }
         break;
@@ -476,11 +486,13 @@ export class RollingUpgradeOrchestrator implements IRollingUpgrade {
     const plan = this.plan!;
 
     // Determine rollback action based on trigger policy
-    const shouldRollback =
-      plan.rollbackTrigger === "on_first_failure" ||
-      plan.rollbackTrigger === "on_canary_failure" ||
-      plan.rollbackTrigger === "on_degradation" ||
-      (trigger === "batch_threshold" && plan.rollbackTrigger === "on_batch_threshold");
+    const isFirstFailure = plan.rollbackTrigger === "on_first_failure";
+    const isCanaryFailure = plan.rollbackTrigger === "on_canary_failure";
+    const isDegradation = plan.rollbackTrigger === "on_degradation";
+    const isBatchThreshold =
+      trigger === "batch_threshold" && plan.rollbackTrigger === "on_batch_threshold";
+
+    const shouldRollback = isFirstFailure || isCanaryFailure || isDegradation || isBatchThreshold;
 
     if (shouldRollback) {
       this._rollbackAll(trigger);
@@ -522,15 +534,19 @@ export class RollingUpgradeOrchestrator implements IRollingUpgrade {
 
   private _buildStats(): RollingUpgradeStats {
     const plan = this.plan!;
-    const completedNodes = this.batches.flatMap((b) => b.nodes).filter(
+    const allNodes = this.batches.flatMap((b) => b.nodes);
+    const completedNodes = allNodes.filter(
       (n) => n.status === "completed",
     ).length;
-    const failedNodes = this.batches.flatMap((b) => b.nodes).filter(
+    const failedNodes = allNodes.filter(
       (n) => n.status === "failed",
     ).length;
-    const rolledBackNodes = this.batches.flatMap((b) => b.nodes).filter(
+    const rolledBackNodes = allNodes.filter(
       (n) => n.status === "rolled_back",
     ).length;
+    const completedBatches = this.batches.filter((b) => b.status === "completed").length;
+    const completedAt = Date.now();
+    const durationMs = completedAt - this.startTime;
 
     const stats: RollingUpgradeStats = {
       planId: plan.id,
@@ -539,10 +555,10 @@ export class RollingUpgradeOrchestrator implements IRollingUpgrade {
       failedNodes,
       rolledBackNodes,
       totalBatches: this.batches.length,
-      completedBatches: this.batches.filter((b) => b.status === "completed").length,
+      completedBatches,
       startedAt: this.startTime,
-      completedAt: Date.now(),
-      durationMs: Date.now() - this.startTime,
+      completedAt,
+      durationMs,
       phase: this.phase,
       events: [...this.events],
     };

@@ -58,6 +58,22 @@ describe("AutoTunerWorker — AC 53.x: Auto Tuner Worker", () => {
     expect(smoothed.cpu).toBeCloseTo(0.4 * 0.3 + 0.8 * 0.7, 5);
   });
 
+  // AC 53.1b: EMA smoothing must apply to latency and qps too
+  it("AC 53.1b: EMA smoothing covers latency and qps independently", () => {
+    worker = new AutoTunerWorker(tuner, { smoothingAlpha: 0.3 });
+
+    // First sample establishes baseline (no smoothing on first feed).
+    worker.feedMetrics(makeMetrics(0.5, 100, 5000));
+    // Second sample mixes with previous via alpha=0.3.
+    worker.feedMetrics(makeMetrics(0.5, 200, 7000));
+
+    const s = worker.getSmoothedMetrics();
+    // latency: 0.3*200 + 0.7*100 = 130
+    expect(s.latency).toBeCloseTo(0.3 * 200 + 0.7 * 100, 5);
+    // qps:     0.3*7000 + 0.7*5000 = 5600
+    expect(s.qps).toBeCloseTo(0.3 * 7000 + 0.7 * 5000, 5);
+  });
+
   // AC 53.2: Cooldown
   it("AC 53.2: should not re-apply same parameter during cooldown", async () => {
     tuner.configure({ learningRate: 0.1, minConfidence: 0.6 });
@@ -77,6 +93,29 @@ describe("AutoTunerWorker — AC 53.x: Auto Tuner Worker", () => {
     const recs2 = await worker.runAnalysis();
     // max_connections blocked, query_timeout_ms may still pass
     expect(recs2.length).toBeGreaterThanOrEqual(0);
+  });
+
+  // AC 53.2b: cooldown blocks a specific parameter from re-application
+  it("AC 53.2b: cooldown prevents re-applying the same parameter within window", async () => {
+    tuner.configure({ learningRate: 0.1, minConfidence: 0.6 });
+
+    worker = new AutoTunerWorker(tuner, {
+      cooldownMs: 3600_000, // 1 hour cooldown
+      minConfidence: 0.6,
+      smoothingAlpha: 1.0,
+    });
+
+    // High CPU → max_connections recommendation applied once.
+    worker.feedMetrics(makeMetrics(0.9, 5, 100));
+    await worker.runAnalysis();
+    const appliedOnce = worker.getAppliedHistory().filter(h => h.parameter === 'max_connections').length;
+    expect(appliedOnce).toBe(1);
+
+    // Same metrics immediately → cooldown should block re-application.
+    worker.feedMetrics(makeMetrics(0.9, 5, 100));
+    await worker.runAnalysis();
+    const appliedTwice = worker.getAppliedHistory().filter(h => h.parameter === 'max_connections').length;
+    expect(appliedTwice).toBe(1);
   });
 
   // AC 53.3: Confidence filter
@@ -135,6 +174,29 @@ describe("AutoTunerWorker — AC 53.x: Auto Tuner Worker", () => {
     expect(last.metricBefore.cpu).toBeCloseTo(0.9, 1);
     expect(last.metricAfter!.cpu).toBeCloseTo(0.5, 1);
     expect(last.parameter).toBe("max_connections");
+  });
+
+  // AC 53.5b: feedbackEffect only fills the first unfilled (no metricAfter) entry
+  it("AC 53.5b: feedbackEffect skips entries that already have metricAfter", async () => {
+    worker = new AutoTunerWorker(tuner, {
+      minConfidence: 0.6,
+      smoothingAlpha: 1.0,
+    });
+
+    worker.feedMetrics(makeMetrics(0.9, 50, 1000));
+    await worker.runAnalysis();
+
+    // First feedback sets metricAfter on the (only) matching entry.
+    worker.feedbackEffect("max_connections", makeMetrics(0.5, 30, 1000));
+    // Second feedback with different metrics must NOT overwrite — the entry
+    // already has metricAfter, so the `&& !h.metricAfter` guard skips it.
+    worker.feedbackEffect("max_connections", makeMetrics(0.2, 15, 1000));
+
+    const history = worker.getAppliedHistory();
+    const entry = history.find(h => h.parameter === 'max_connections');
+    expect(entry).toBeDefined();
+    // First feedback value preserved; the `||` mutant would overwrite with 0.2.
+    expect(entry!.metricAfter!.cpu).toBeCloseTo(0.5, 1);
   });
 
   // AC 53.6: Feed metrics

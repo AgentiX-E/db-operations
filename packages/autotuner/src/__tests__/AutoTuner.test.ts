@@ -59,6 +59,28 @@ describe('InMemoryAutoTuner', () => {
     expect(pool!.recommendedValue).toBeGreaterThan(10);
   });
 
+  it('computes pool size as min(20, ceil(qps/500))', async () => {
+    const tuner = new InMemoryAutoTuner();
+    // qps = 5200 (exceeds 5000 threshold) → ceil(5200/500) = ceil(10.4) = 11
+    // → min(20, 11) = 11. The `/500` divisor is observable here: a `*500`
+    // mutant would yield min(20, 2_600_000) = 20, failing the exact assertion.
+    const metrics: AutoScalerMetrics = { cpu: 0.3, qps: 5200, latency: 10, connectionCount: 10 };
+    const recs = await tuner.analyze(metrics);
+    const pool = recs.find(r => r.parameter === 'pool_size');
+    expect(pool).toBeDefined();
+    expect(pool!.recommendedValue).toBe(11);
+  });
+
+  it('reports CPU percentage in the recommendation reason', async () => {
+    const tuner = new InMemoryAutoTuner();
+    const metrics: AutoScalerMetrics = { cpu: 0.85, qps: 100, latency: 10, connectionCount: 5 };
+    const recs = await tuner.analyze(metrics);
+    const maxConn = recs.find(r => r.parameter === 'max_connections');
+    expect(maxConn).toBeDefined();
+    // 0.85 * 100 = 85%; a `/100` mutant would produce "0%" here.
+    expect(maxConn!.reason).toContain('85%');
+  });
+
   it('returns multiple recommendations when multiple thresholds exceeded', async () => {
     const tuner = new InMemoryAutoTuner();
     const metrics: AutoScalerMetrics = { cpu: 0.85, qps: 8000, latency: 200, connectionCount: 20 };

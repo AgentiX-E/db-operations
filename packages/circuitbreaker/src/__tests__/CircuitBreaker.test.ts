@@ -48,6 +48,19 @@ describe('InMemoryCircuitBreaker', () => {
     expect(cb.getState()).toBe('closed');
   });
 
+  it('call() transitions half-open to closed on successful execution', async () => {
+    const cb = new InMemoryCircuitBreaker('test', { failureThreshold: 1, timeoutMs: 1 });
+    cb.onFailure();        // open the circuit
+    await new Promise((r) => setTimeout(r, 5)); // let timeoutMs elapse
+    expect(cb.getState()).toBe('half-open');
+
+    // A successful call while half-open must hit the `currentState === 'half-open'`
+    // branch and close the circuit.
+    const result = await cb.call(async () => 'ok');
+    expect(result).toBe('ok');
+    expect(cb.getState()).toBe('closed');
+  });
+
   it('reset restores closed state and clears failures', () => {
     const cb = new InMemoryCircuitBreaker('test', { failureThreshold: 1, timeoutMs: 60000 });
     cb.onFailure();

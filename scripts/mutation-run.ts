@@ -19,7 +19,7 @@
 
 import { readFileSync, writeFileSync, readdirSync, statSync, existsSync, mkdirSync } from 'node:fs';
 import { join, resolve, relative } from 'node:path';
-import { execSync } from 'node:child_process';
+import { exec } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import * as ts from 'typescript';
 
@@ -217,29 +217,45 @@ function findTest(pkg: string): string[] {
 }
 
 // ── Test Runner ────────────────────────────────────
+// Async `exec` (not execSync) so that the SIGTERM/SIGINT handlers installed
+// above can run and restore mutated source files even if the runner is
+// interrupted mid-test. execSync blocks the event loop, preventing signal
+// handlers from firing and leaving source files corrupted on termination.
 
-function runTests(testFiles: string[]): { killed: boolean; durationMs: number; error?: string } {
-  if (testFiles.length === 0) return { killed: false, durationMs: 0 };
+function runTests(testFiles: string[]): Promise<{ killed: boolean; durationMs: number; error?: string }> {
+  if (testFiles.length === 0) return Promise.resolve({ killed: false, durationMs: 0 });
 
   const paths = testFiles.join(' ');
   const start = Date.now();
 
-  try {
-    execSync(`npx vitest run ${paths} 2>&1`, {
-      cwd: ROOT, encoding: 'utf-8', timeout: 300_000, maxBuffer: 8 * 1024 * 1024,
-      env: { ...process.env, CI: 'true', FORCE_COLOR: '0', NODE_OPTIONS: '--max-old-space-size=4096' },
-      shell: '/bin/bash',
-    });
-    return { killed: false, durationMs: Date.now() - start };
-  } catch (err: any) {
-    const combined = ((err.stdout || '') + (err.stderr || '')).toLowerCase();
-    // Vitest outputs failure info to stdout, not stderr
-    if (combined.includes('fail') || combined.includes('assertionerror') ||
-      combined.includes('expected ') || combined.includes('×')) {
-      return { killed: true, durationMs: Date.now() - start };
-    }
-    return { killed: false, durationMs: Date.now() - start, error: combined.slice(0, 100) };
-  }
+  return new Promise((resolve) => {
+    exec(
+      `npx vitest run ${paths} 2>&1`,
+      {
+        cwd: ROOT,
+        encoding: 'utf-8',
+        timeout: 300_000,
+        maxBuffer: 8 * 1024 * 1024,
+        env: { ...process.env, CI: 'true', FORCE_COLOR: '0', NODE_OPTIONS: '--max-old-space-size=4096' },
+        shell: '/bin/bash',
+      },
+      (err, stdout, stderr) => {
+        const durationMs = Date.now() - start;
+        if (!err) {
+          resolve({ killed: false, durationMs });
+          return;
+        }
+        const combined = ((stdout || '') + (stderr || '')).toLowerCase();
+        // Vitest outputs failure info to stdout, not stderr
+        if (combined.includes('fail') || combined.includes('assertionerror') ||
+          combined.includes('expected ') || combined.includes('×')) {
+          resolve({ killed: true, durationMs });
+          return;
+        }
+        resolve({ killed: false, durationMs, error: combined.slice(0, 100) });
+      },
+    );
+  });
 }
 
 // ── Main ───────────────────────────────────────────
@@ -280,7 +296,7 @@ async function main(): Promise<void> {
     try {
       applyMutantInPlace(m.filePath, m);
       const testFiles = killerPass ? [join(ROOT, 'packages')] : findTest(pkg);
-      const { killed: isKilled, error } = runTests(testFiles);
+      const { killed: isKilled, error } = await runTests(testFiles);
 
       if (error?.includes('syntax') || error?.includes('unexpected') || error?.includes('parse')) {
         compileErr++;

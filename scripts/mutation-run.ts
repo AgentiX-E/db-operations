@@ -18,11 +18,27 @@
  */
 
 import { readFileSync, writeFileSync, readdirSync, statSync, existsSync, mkdirSync } from 'node:fs';
+import { join, resolve, relative } from 'node:path';
+import { execSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import * as ts from 'typescript';
 
-/** Global registry of mutated files → original content, used to restore on
- *  abrupt termination (SIGTERM/SIGINT). Without this, a timeout/kill during
- *  mutation leaves source files permanently corrupted (e.g. `false`→`true`,
- *  `i < x`→`i >= x` loops). */
+const ROOT = resolve(__dirname, '..');
+const REPORT_DIR = join(ROOT, '.mutation-report');
+
+// CLI args
+const args = process.argv.slice(2);
+const targetPkg = args.find(a => a.startsWith('--pkg='))?.split('=')[1];
+const maxMutants = parseInt(args.find(a => a.startsWith('--max='))?.split('=')[1] || '60');
+const killerPass = args.includes('--killer');
+
+// ── Source Restoration Safety Net ──────────────────
+// The mutation runner overwrites source files in-place then restores them in a
+// `finally` block. If the process is killed externally (e.g. `timeout`), the
+// `finally` never runs and source files are left permanently corrupted
+// (observed: `false`→`true`, `i < x`→`i >= x` infinite loop). This registry
+// snapshots every scanned file before mutation and restores on termination.
+
 const _originals = new Map<string, string>();
 
 function _snapshotOriginal(filePath: string): void {
@@ -34,8 +50,11 @@ function _snapshotOriginal(filePath: string): void {
 function _restoreAllOriginals(): void {
   _originals.forEach((original, fp) => {
     try {
-      writeFileSync(fp, original);
-      process.stderr.write(`\n[restore] ${relative(ROOT, fp)}\n`);
+      const current = readFileSync(fp, 'utf-8');
+      if (current !== original) {
+        writeFileSync(fp, original);
+        process.stderr.write(`\n[restore] ${relative(ROOT, fp)}\n`);
+      }
     } catch {
       // best-effort restore; do not mask the original signal
     }
@@ -51,19 +70,18 @@ process.on('SIGINT', () => {
   _restoreAllOriginals();
   process.exit(130);
 });
-import { join, resolve, relative } from 'node:path';
-import { execSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import * as ts from 'typescript';
-
-const ROOT = resolve(__dirname, '..');
-const REPORT_DIR = join(ROOT, '.mutation-report');
-
-// CLI args
-const args = process.argv.slice(2);
-const targetPkg = args.find(a => a.startsWith('--pkg='))?.split('=')[1];
-const maxMutants = parseInt(args.find(a => a.startsWith('--max='))?.split('=')[1] || '60');
-const killerPass = args.includes('--killer');
+// Synchronous final safety net for any clean exit path.
+process.on('exit', () => {
+  _originals.forEach((original, fp) => {
+    try {
+      if (readFileSync(fp, 'utf-8') !== original) {
+        writeFileSync(fp, original);
+      }
+    } catch {
+      // best-effort
+    }
+  });
+});
 
 // ── Discovery ──────────────────────────────────────
 

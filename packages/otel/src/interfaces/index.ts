@@ -15,6 +15,8 @@ export interface IOTELBridge {
 
   shutdown(): Promise<void>;
 
+  isShutdown(): boolean;
+
   getSpans(): OTSpan[];
   getMetrics(): OTMetric[];
   getLogs(): OTLog[];

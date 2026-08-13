@@ -67,6 +67,13 @@ describe('InMemoryOTELBridge', () => {
     await expect(otel.shutdown()).resolves.not.toThrow();
   });
 
+  it('isShutdown reflects shutdown state', async () => {
+    const otel = new InMemoryOTELBridge();
+    expect(otel.isShutdown()).toBe(false);
+    await otel.shutdown();
+    expect(otel.isShutdown()).toBe(true);
+  });
+
   it('spans have traceId set', () => {
     const otel = new InMemoryOTELBridge();
     const s = otel.startSpan('root');

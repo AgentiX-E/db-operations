@@ -56,6 +56,10 @@ export class InMemoryOTELBridge implements IOTELBridge {
     this._shutDown = true;
   }
 
+  isShutdown(): boolean {
+    return this._shutDown;
+  }
+
   getSpans(): OTSpan[] {
     return [...this.spans];
   }

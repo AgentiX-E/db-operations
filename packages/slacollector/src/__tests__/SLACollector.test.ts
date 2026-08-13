@@ -60,6 +60,34 @@ describe('InMemorySLACollector', () => {
     expect(col.getUptime()).toBe(80);
   });
 
+  it('getUptime includes events exactly at the since boundary', () => {
+    const col = new InMemorySLACollector();
+    const boundary = new Date('2026-07-12T00:00:00Z');
+    const older = new Date('2026-07-11T00:00:00Z');
+
+    // One non-violating event exactly AT the boundary, one older.
+    col.record({ timestamp: boundary, metric: 'uptime', value: 50, threshold: 100 });
+    col.record({ timestamp: older, metric: 'uptime', value: 50, threshold: 100 });
+
+    // `since = boundary` should include the boundary event (>= semantics) and
+    // exclude the older one → 1 event, 0 violations → 100% uptime.
+    expect(col.getUptime(boundary)).toBe(100);
+  });
+
+  it('getUptime excludes events strictly before since', () => {
+    const col = new InMemorySLACollector();
+    const recent = new Date('2026-07-12T00:00:00Z');
+    const older = new Date('2026-07-11T00:00:00Z');
+
+    col.record({ timestamp: older, metric: 'uptime', value: 200, threshold: 100 });
+    col.record({ timestamp: recent, metric: 'uptime', value: 50, threshold: 100 });
+
+    // since = recent → only the recent (non-violating) event counts → 100%.
+    expect(col.getUptime(recent)).toBe(100);
+    // since before older → both count, 1 violation of 2 → 50%.
+    expect(col.getUptime(new Date('2026-07-10T00:00:00Z'))).toBe(50);
+  });
+
   it('returns multiple metric compliance', () => {
     const col = new InMemorySLACollector();
     col.record({ timestamp: new Date(), metric: 'latency', value: 50, threshold: 100 });

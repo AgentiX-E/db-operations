@@ -18,6 +18,39 @@
  */
 
 import { readFileSync, writeFileSync, readdirSync, statSync, existsSync, mkdirSync } from 'node:fs';
+
+/** Global registry of mutated files → original content, used to restore on
+ *  abrupt termination (SIGTERM/SIGINT). Without this, a timeout/kill during
+ *  mutation leaves source files permanently corrupted (e.g. `false`→`true`,
+ *  `i < x`→`i >= x` loops). */
+const _originals = new Map<string, string>();
+
+function _snapshotOriginal(filePath: string): void {
+  if (!_originals.has(filePath)) {
+    _originals.set(filePath, readFileSync(filePath, 'utf-8'));
+  }
+}
+
+function _restoreAllOriginals(): void {
+  _originals.forEach((original, fp) => {
+    try {
+      writeFileSync(fp, original);
+      process.stderr.write(`\n[restore] ${relative(ROOT, fp)}\n`);
+    } catch {
+      // best-effort restore; do not mask the original signal
+    }
+  });
+  _originals.clear();
+}
+
+process.on('SIGTERM', () => {
+  _restoreAllOriginals();
+  process.exit(143);
+});
+process.on('SIGINT', () => {
+  _restoreAllOriginals();
+  process.exit(130);
+});
 import { join, resolve, relative } from 'node:path';
 import { execSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -207,6 +240,7 @@ async function main(): Promise<void> {
     const m = generateMutants(f, maxMutants);
     if (m.length > 0) console.log(`   ${relative(ROOT, f)}: ${m.length}`);
     allMutants.push(...m);
+    _snapshotOriginal(f);
   }
 
   console.log(`\n   Total: ${allMutants.length} mutants\n`);
@@ -223,6 +257,7 @@ async function main(): Promise<void> {
     if (!results.has(pkg)) results.set(pkg, { killed: 0, survived: 0, compileErr: 0, survivors: [] });
 
     const originalSource = readFileSync(m.filePath, 'utf-8');
+    _snapshotOriginal(m.filePath);
 
     try {
       applyMutantInPlace(m.filePath, m);

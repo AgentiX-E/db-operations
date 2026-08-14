@@ -124,9 +124,16 @@ export class FederatedQueryRouter implements IFederatedQueryRouter {
         .map((r) => r.nodeId);
 
       if (failedNodeIds.length === 0) {
-        // All nodes succeeded but overall failed — shouldn't happen
+        // No nodes reported as failed. This happens when all nodes were
+        // excluded by a prior failover and the re-planned assignment was
+        // empty — so there's nothing new to record, but we still must not lose
+        // the original failure reason.
         this.failedQueries++;
-        return result;
+        if (result.nodeResults.length > 0) return result;
+        return {
+          ...result,
+          error: lastError || result.error || "Max retries exceeded",
+        };
       }
 
       for (const nid of failedNodeIds) {
@@ -135,14 +142,20 @@ export class FederatedQueryRouter implements IFederatedQueryRouter {
         this.failoverHistory.push(event);
       }
 
+      // Preserve the real error from this attempt regardless of whether we
+      // re-plan, so callers never lose the underlying failure reason. If this
+      // attempt produced no error string (e.g. all nodes were excluded), keep
+      // the previous lastError.
+      const attemptError = result.nodeResults
+        .filter((r) => !r.success)
+        .map((r) => r.error)
+        .join("; ");
+      if (attemptError) lastError = attemptError;
+
       if (retries < this.policy.maxRetries) {
         // Re-plan with fallback strategy
         const fbStrategy = this.policy.fallbackStrategy || this.policy.strategy;
         plan = this._replan(plan, fbStrategy, failedNodeIds);
-        lastError = result.nodeResults
-          .filter((r) => !r.success)
-          .map((r) => r.error)
-          .join("; ");
 
         // Backoff
         await _sleep(this.policy.retryBackoffMs * Math.pow(2, retries));
@@ -412,7 +425,7 @@ export class FederatedQueryRouter implements IFederatedQueryRouter {
     // Score each node based on load metrics
     const scored = candidates.map((node) => ({
       node,
-      score: this._computeNodeScore(node, threshold),
+      score: this.computeNodeScore(node, threshold),
     }));
 
     // Filter nodes exceeding cost thresholds
@@ -444,7 +457,7 @@ export class FederatedQueryRouter implements IFederatedQueryRouter {
     }));
   }
 
-  private _computeNodeScore(
+  computeNodeScore(
     node: FederatedNode,
     threshold?: import("../interfaces/index.js").CostThreshold,
   ): number {

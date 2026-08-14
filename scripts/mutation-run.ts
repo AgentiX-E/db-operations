@@ -361,10 +361,11 @@ async function main(): Promise<void> {
   }
 
   if (survived > 0) {
-    lines.push('', '## Survivors (Test Gaps)', '', '| ID | Pkg | Op | Line | Original→Replacement |', '|----|-----|----|------|----------------------|');
+    lines.push('', '## Survivors (Test Gaps)', '', '| ID | Pkg | File | Line | Op | Original→Replacement |', '|----|-----|------|------|-----|----------------------|');
     for (const [p, s] of results) {
       for (const m of s.survivors) {
-        lines.push(`| ${m.id} | ${p} | ${m.operator} | L${m.line} | \`${m.original}\` → \`${m.replacement}\` |`);
+        const fn = relative(ROOT, m.filePath).split('/').slice(-2).join('/');
+        lines.push(`| ${m.id} | ${p} | ${fn} | L${m.line} | ${m.operator} | \`${m.original}\` → \`${m.replacement}\` |`);
       }
     }
   }

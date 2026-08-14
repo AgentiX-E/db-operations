@@ -242,7 +242,7 @@ export class FederatedQueryRouter implements IFederatedQueryRouter {
       successfulQueries: this.successfulQueries,
       failedQueries: this.failedQueries,
       totalFailovers: this.totalFailovers,
-      avgPlanTimeMs: this.totalPlanTimeNs * planCount / 1_000_000,
+      avgPlanTimeMs: this.totalPlanTimeNs / planCount / 1_000_000,
       avgExecutionTimeMs: this.totalExecTimeMs / queryCount,
       lastQueryTimestamp: this.lastQueryTimestamp,
     };

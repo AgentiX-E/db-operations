@@ -60,11 +60,11 @@ export interface FileAuditStoreConfig {
 
 // ── Defaults ────────────────────────────────────────────────────
 
-const DEFAULT_MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
-const DEFAULT_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
-const DEFAULT_RETENTION_DAYS = 90;
-const DEFAULT_FILE_PREFIX = 'audit';
-const DEFAULT_MAX_SCAN_LINES = 10000;
+export const DEFAULT_MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
+export const DEFAULT_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
+export const DEFAULT_RETENTION_DAYS = 90;
+export const DEFAULT_FILE_PREFIX = 'audit';
+export const DEFAULT_MAX_SCAN_LINES = 10000;
 
 // ══════════════════════════════════════════════════════════════════
 //  FileAuditStore
@@ -155,7 +155,7 @@ export class FileAuditStore implements IAuditStore {
   /** Check if rotation is needed. */
   private shouldRotate(): boolean {
     if (this.currentSize >= this.maxFileSize) return true;
-    if (Date.now() - this.currentCreatedAt < this.maxAgeMs) return true;
+    if (Date.now() - this.currentCreatedAt >= this.maxAgeMs) return true;
     return false;
   }
 

@@ -174,6 +174,23 @@ describe('InMemoryAuditStore', () => {
     expect(afterEarly.some((e) => e.id === id1)).toBe(false);
   });
 
+  // ── A13b: endTime excludes entries strictly after the bound ────
+  it('A13b: endTime excludes entries strictly after the bound', async () => {
+    const id1 = await makeEntry(store, { operation: 'early' });
+    await sleep(10);
+    const id2 = await makeEntry(store, { operation: 'late' });
+
+    const entry1 = (await store.get(id1))!;
+
+    // endTime = entry1.timestamp → entry2 (later) must be excluded,
+    // exercising the `entry.timestamp > filter.endTime → return false` branch.
+    const beforeLate = await store.query({
+      endTime: new Date(entry1.timestamp),
+    });
+    expect(beforeLate.some((e) => e.id === id2)).toBe(false);
+    expect(beforeLate.some((e) => e.id === id1)).toBe(true);
+  });
+
   // ── A14: count with filter matches filtered count ──────────────
   it('A14: count with filter matches filtered count', async () => {
     await makeEntry(store, { operation: 'create' });
@@ -219,6 +236,21 @@ describe('InMemoryAuditStore', () => {
 
     const remaining = await store.count();
     expect(remaining).toBe(2); // new1 + new2
+  });
+
+  // ── A9b: pruneOlderThan returns the exact number removed ──────
+  it('A9b: pruneOlderThan returns the exact count of removed entries', async () => {
+    await makeEntry(store, { operation: 'old1' });
+    await makeEntry(store, { operation: 'old2' });
+    await sleep(50);
+    const cutoff = new Date();
+    await sleep(10);
+    await makeEntry(store, { operation: 'new1' });
+
+    // Exactly 2 old entries removed; `before - keep.length` == 2.
+    const removed = await store.pruneOlderThan(cutoff);
+    expect(removed).toBe(2);
+    expect(await store.count()).toBe(1);
   });
 
   // ── query filters by result ────────────────────────────────────

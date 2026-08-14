@@ -31,6 +31,12 @@ const args = process.argv.slice(2);
 const targetPkg = args.find(a => a.startsWith('--pkg='))?.split('=')[1];
 const maxMutants = parseInt(args.find(a => a.startsWith('--max='))?.split('=')[1] || '60');
 const killerPass = args.includes('--killer');
+// Per-mutant test timeout (ms). A mutated source can introduce an infinite
+// loop (e.g. `<`→`>=` on an empty input makes `0 >= 0` always true). Without a
+// per-mutant timeout, a single hung mutant stalls the entire run until the
+// outer shell timeout kills the whole process. Default 30s is ample for a
+// normal test file but bounds any deadlock.
+const MUTANT_TIMEOUT_MS = parseInt(args.find(a => a.startsWith('--timeout='))?.split('=')[1] || '30000');
 
 // ── Source Restoration Safety Net ──────────────────
 // The mutation runner overwrites source files in-place then restores them in a
@@ -230,11 +236,11 @@ function runTests(testFiles: string[]): Promise<{ killed: boolean; durationMs: n
 
   return new Promise((resolve) => {
     exec(
-      `npx vitest run ${paths} 2>&1`,
+      `npx vitest run --pool=forks ${paths} 2>&1`,
       {
         cwd: ROOT,
         encoding: 'utf-8',
-        timeout: 300_000,
+        timeout: MUTANT_TIMEOUT_MS,
         maxBuffer: 8 * 1024 * 1024,
         env: { ...process.env, CI: 'true', FORCE_COLOR: '0', NODE_OPTIONS: '--max-old-space-size=4096' },
         shell: '/bin/bash',
@@ -245,6 +251,9 @@ function runTests(testFiles: string[]): Promise<{ killed: boolean; durationMs: n
           resolve({ killed: false, durationMs });
           return;
         }
+        // A timeout (ETIMEDOUT) means the mutated source caused an infinite
+        // loop or deadlock in the test process — treat as survived (test gap),
+        // not a kill, and move on to the next mutant.
         const combined = ((stdout || '') + (stderr || '')).toLowerCase();
         // Vitest outputs failure info to stdout, not stderr
         if (combined.includes('fail') || combined.includes('assertionerror') ||

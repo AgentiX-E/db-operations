@@ -49,6 +49,12 @@ function computeChainChecksum(migrations: MigrationDescriptor[]): string {
 
 function simpleHash(input: string): string {
   // Deterministic hash for testability (not cryptographically strong but sufficient for drift detection)
+  // Empty input short-circuits to a stable non-zero constant so the loops below
+  // never run with `input.length === 0` (which would make a `<`→`>=` boundary
+  // mutation loop forever).
+  if (input.length === 0) {
+    return "0000000000000000";
+  }
   let h = 0;
   for (let i = 0; i < input.length; i++) {
     const c = input.charCodeAt(i);

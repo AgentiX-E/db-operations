@@ -117,6 +117,26 @@ describe("PrometheusPushExporter — AC 51.x: Prometheus Push Exporter", () => {
     expect(body).toContain("simple_total 1");
   });
 
+  // AC 51.4b: a counter named with a _count suffix must NOT be classified as histogram
+  it("AC 51.4b: counter with _count suffix is not misclassified as histogram", async () => {
+    const exporter = new PrometheusPushExporter(registry, config);
+
+    // A counter whose base name happens to end in "_count". hasCount will be
+    // true but hasSum false; the `&&` must keep type = counter (not histogram).
+    registry.counter("requests_count").inc();
+    registry.counter("requests_count").inc();
+
+    const mockFetch = globalThis.fetch as ReturnType<typeof vi.fn>;
+    mockFetch.mockResolvedValueOnce({ ok: true });
+
+    await exporter.push();
+
+    const body = mockFetch.mock.calls[0][1].body;
+    // baseName strips the _count suffix → "requests"; type must be counter.
+    expect(body).toContain("# TYPE requests counter");
+    expect(body).not.toContain("# TYPE requests histogram");
+  });
+
   // AC 51.5: URL construction
   it("AC 51.5: should build URL with grouping keys", async () => {
     const extendedConfig: PrometheusPushExporterConfig = {
@@ -204,6 +224,28 @@ describe("PrometheusPushExporter — AC 51.x: Prometheus Push Exporter", () => {
     exporter.stop();
     vi.advanceTimersByTime(10000);
     expect(pushSpy).toHaveBeenCalledTimes(1);
+
+    vi.useRealTimers();
+  });
+
+  // AC 51.10b: start() must not schedule when pushIntervalMs is not a positive number
+  it("AC 51.10b: start() is a no-op when pushIntervalMs is non-positive", async () => {
+    vi.useFakeTimers();
+
+    // A negative interval distinguishes `&&` from `||`:
+    //   -5 && (-5 > 0)  →  -5 && false  →  false  (no schedule)  ✓ correct
+    //   -5 || (-5 > 0)  →  -5 || false  →  -5     (schedules!)  ✗ mutant
+    const exporter = new PrometheusPushExporter(registry, {
+      ...config,
+      pushIntervalMs: -1,
+    });
+
+    const pushSpy = vi.spyOn(exporter, "push");
+    exporter.start();
+
+    // No interval scheduled → advancing time must not trigger any push.
+    vi.advanceTimersByTime(100_000);
+    expect(pushSpy).not.toHaveBeenCalled();
 
     vi.useRealTimers();
   });

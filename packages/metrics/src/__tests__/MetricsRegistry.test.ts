@@ -115,6 +115,22 @@ describe('MetricsRegistry', () => {
       expect(p90).toBe(40);
     });
 
+    it('getQuantile sorts values before computing the index', () => {
+      const registry = new MetricsRegistry();
+      const h = registry.histogram('unsorted_ms');
+
+      // Observe in non-monotonic order; the `a - b` comparator must sort
+      // ascending. A `+` mutant (a + b) breaks ordering and yields a wrong value.
+      h.observe(50);
+      h.observe(10);
+      h.observe(40);
+      h.observe(20);
+      h.observe(30);
+
+      // Sorted ascending → [10, 20, 30, 40, 50]; median = sorted[2] = 30.
+      expect(h.getQuantile(0.5)).toBe(30);
+    });
+
     it('getQuantile returns undefined for empty histogram', () => {
       const registry = new MetricsRegistry();
       const h = registry.histogram('empty');

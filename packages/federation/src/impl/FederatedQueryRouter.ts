@@ -47,6 +47,19 @@ export class FederatedQueryRouter implements IFederatedQueryRouter {
   private lastQueryTimestamp: number | null = null;
   private roundRobinCounter = 0;
 
+  // Injectable clock for deterministic timing. Defaults to the real monotonic
+  // nanosecond clock (`_nowNs`) and wall-clock milliseconds (`Date.now`).
+  // Tests inject a fake clock so elapsed-time arithmetic (`-`) and average
+  // division (`/`) become precisely assertable.
+  private readonly _clock: { nowNs: () => number; nowMs: () => number };
+
+  constructor(clock?: { nowNs?: () => number; nowMs?: () => number }) {
+    this._clock = {
+      nowNs: clock?.nowNs ?? _nowNs,
+      nowMs: clock?.nowMs ?? Date.now,
+    };
+  }
+
   // ── Node Management ───────────────────────────────────────
 
   registerNode(node: FederatedNode): void {
@@ -76,7 +89,7 @@ export class FederatedQueryRouter implements IFederatedQueryRouter {
   // ── Query Planning ────────────────────────────────────────
 
   planQuery(query: FederatedQuery): QueryPlan {
-    const startNs = _nowNs();
+    const startNs = this._clock.nowNs();
     const assignments = this._computeAssignments(query, this.policy.strategy);
     const cost = this._estimateCost(assignments);
 
@@ -89,7 +102,7 @@ export class FederatedQueryRouter implements IFederatedQueryRouter {
     };
 
     this.planCache.set(query.id, plan);
-    const elapsedNs = _nowNs() - startNs;
+    const elapsedNs = this._clock.nowNs() - startNs;
     this.totalPlanTimeNs += elapsedNs;
 
     return plan;
@@ -185,9 +198,9 @@ export class FederatedQueryRouter implements IFederatedQueryRouter {
     this.totalQueries++;
     this.lastQueryTimestamp = Date.now();
 
-    const start = Date.now();
+    const start = this._clock.nowMs();
     const result = await this._executePlanInternal(plan, executor);
-    result.totalDurationMs = Date.now() - start;
+    result.totalDurationMs = this._clock.nowMs() - start;
 
     if (result.success) {
       this.successfulQueries++;
@@ -496,7 +509,7 @@ export class FederatedQueryRouter implements IFederatedQueryRouter {
     executor: NodeExecutor,
   ): Promise<FederatedResult> {
     const results: NodeResult[] = [];
-    const startMs = Date.now();
+    const startMs = this._clock.nowMs();
 
     // Execute fan-out
     const nodeIds = new Set(plan.assignments.map((a) => a.nodeId));
@@ -544,7 +557,7 @@ export class FederatedQueryRouter implements IFederatedQueryRouter {
     }
 
     const successCount = results.filter((r) => r.success).length;
-    const totalDuration = Date.now() - startMs;
+    const totalDuration = this._clock.nowMs() - startMs;
 
     // Merge rows from successful nodes
     const mergedRows = results

@@ -29,6 +29,7 @@ const REPORT_DIR = join(ROOT, '.mutation-report');
 // CLI args
 const args = process.argv.slice(2);
 const targetPkg = args.find(a => a.startsWith('--pkg='))?.split('=')[1];
+const targetFile = args.find(a => a.startsWith('--file='))?.split('=')[1];
 const maxMutants = parseInt(args.find(a => a.startsWith('--max='))?.split('=')[1] || '60');
 const killerPass = args.includes('--killer');
 // Per-mutant test timeout (ms). A mutated source can introduce an infinite
@@ -272,7 +273,9 @@ function runTests(testFiles: string[]): Promise<{ killed: boolean; durationMs: n
 async function main(): Promise<void> {
   if (!existsSync(REPORT_DIR)) mkdirSync(REPORT_DIR, { recursive: true });
 
-  const files = discoverFiles(targetPkg);
+  const files = discoverFiles(targetPkg).filter((f) =>
+    !targetFile || relative(ROOT, f).includes(targetFile)
+  );
   console.log(`\n🔬 Mutation Test Engine`);
   console.log(`   Source files: ${files.length}${targetPkg ? ` (pkg: ${targetPkg})` : ''}`);
   console.log(`   Max mutants/file: ${maxMutants}\n`);

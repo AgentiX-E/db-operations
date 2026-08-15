@@ -444,3 +444,236 @@ describe("cost sort", () => {
     expect(plan.assignments[1]!.priority).toBe(2);
   });
 });
+
+// ── high-line survivors: estimate cost, failover internals, defaults ──
+
+describe("estimate cost and defaults", () => {
+  it("estimateCost is max(1, assignmentCount * 10)", () => {
+    const router = new FederatedQueryRouter();
+    router.setRoutingPolicy({ strategy: "weighted", maxRetries: 0, retryBackoffMs: 1, skipUnhealthy: false, geoAffinity: false });
+    router.registerNode(makeNode({ id: "a" }));
+    router.registerNode(makeNode({ id: "b" }));
+    // weighted returns both nodes → 2 assignments → cost = 20.
+    const plan = router.planQuery({ id: "q", sql: "x", intent: "read", consistency: "eventual", targetShards: [], timeoutMs: 100 } as FederatedQuery);
+    expect(plan.estimatedCost).toBe(20);
+  });
+
+  it("default policy skips unhealthy nodes (skipUnhealthy=true)", () => {
+    const router = new FederatedQueryRouter();
+    // weighted returns ALL candidates, so the unhealthy node is structurally
+    // present in the candidate set. Default skipUnhealthy=true must exclude it.
+    router.setRoutingPolicy({ strategy: "weighted", maxRetries: 0, retryBackoffMs: 1, geoAffinity: false });
+    router.registerNode(makeNode({ id: "healthy", health: "healthy", weight: 1 }));
+    router.registerNode(makeNode({ id: "sick", health: "unhealthy", weight: 5 }));
+    const plan = router.planQuery({ id: "q", sql: "x", intent: "read", consistency: "eventual", targetShards: [], timeoutMs: 100 } as FederatedQuery);
+    // Default skipUnhealthy=true must exclude the unhealthy node entirely.
+    expect(plan.assignments.map((a) => a.nodeId)).not.toContain("sick");
+    expect(plan.assignments.map((a) => a.nodeId)).toContain("healthy");
+  });
+
+  it("default policy does not use geo affinity (geoAffinity=false)", () => {
+    const router = new FederatedQueryRouter();
+    router.registerNode(makeNode({ id: "far", region: "ap-south-1" }));
+    router.registerNode(makeNode({ id: "local", region: "us-east-1" }));
+    const plan = router.planQuery({ id: "q", sql: "x", intent: "read", consistency: "eventual", targetShards: [], timeoutMs: 100 } as FederatedQuery);
+    // Default strategy is round_robin (not geo_affinity), so no affinity filter.
+    expect(plan.strategy).toBe("round_robin");
+  });
+});
+
+describe("failover internals", () => {
+  it("records failover with replaceent node and 1-based attempt reason", async () => {
+    const router = new FederatedQueryRouter();
+    router.setRoutingPolicy({ strategy: "round_robin", fallbackStrategy: "round_robin", maxRetries: 1, retryBackoffMs: 1, skipUnhealthy: false, geoAffinity: false });
+    router.registerNode(makeNode({ id: "fail", health: "healthy", shardIds: ["s1"] }));
+    router.registerNode(makeNode({ id: "spare", health: "healthy", shardIds: ["s1"] }));
+    const exec = async (node: any) => ({
+      nodeId: node.id, shardIds: ["s1"], rows: [], rowCount: 0, durationMs: 1,
+      success: node.id !== "fail", error: node.id === "fail" ? "timeout" : undefined,
+    });
+    await router.executeQuery({ id: "q", sql: "x", intent: "read", consistency: "eventual", targetShards: ["s1"], timeoutMs: 100 } as FederatedQuery, exec as any);
+    const evt = router.getFailoverHistory()[0]!;
+    expect(evt.success).toBe(true);           // fbNode !== undefined
+    expect(evt.failoverNodeId).toBe("spare"); // replacement found via health filter
+    // retryAttempt is 0-based internally, so the reason reports attempt + 1.
+    expect(evt.retryAttempt).toBe(0);
+  });
+
+  it("records failover success=false when no healthy replacement exists", async () => {
+    const router = new FederatedQueryRouter();
+    router.setRoutingPolicy({ strategy: "round_robin", fallbackStrategy: "round_robin", maxRetries: 1, retryBackoffMs: 1, skipUnhealthy: false, geoAffinity: false });
+    // Only one node (the failing one); no spare with overlapping shards.
+    router.registerNode(makeNode({ id: "only", health: "healthy", shardIds: ["s1"] }));
+    const exec = async (node: any) => ({
+      nodeId: node.id, shardIds: ["s1"], rows: [], rowCount: 0, durationMs: 1,
+      success: false, error: "kaput",
+    });
+    await router.executeQuery({ id: "q", sql: "x", intent: "read", consistency: "eventual", targetShards: ["s1"], timeoutMs: 100 } as FederatedQuery, exec as any);
+    const evt = router.getFailoverHistory()[0]!;
+    expect(evt.success).toBe(false); // fbNode === undefined → the `!==` gate
+  });
+});
+
+// ── executePlan internals: error join, missing node, empty shards ──
+
+describe("executePlan internals", () => {
+  it("error joins failure messages only when ALL nodes fail (successCount===0)", async () => {
+    const router = new FederatedQueryRouter();
+    router.setRoutingPolicy({ strategy: "weighted", maxRetries: 0, retryBackoffMs: 1, skipUnhealthy: false, geoAffinity: false });
+    router.registerNode(makeNode({ id: "a" }));
+    router.registerNode(makeNode({ id: "b" }));
+    const plan = router.planQuery({ id: "q", sql: "x", intent: "read", consistency: "eventual", targetShards: [], timeoutMs: 100 } as FederatedQuery);
+
+    // All fail → error is the joined messages.
+    const allFail = await router.executePlan(plan, (async (n: any) => ({
+      nodeId: n.id, shardIds: [], rows: [], rowCount: 0, durationMs: 1, success: false, error: `fail-${n.id}`,
+    })) as any);
+    expect(allFail.success).toBe(false);
+    expect(allFail.error).toBe("fail-a; fail-b");
+
+    // Some succeed → error is undefined.
+    const mixed = await router.executePlan(plan, (async (n: any) => ({
+      nodeId: n.id, shardIds: [], rows: n.id === "a" ? [{ id: 1 }] : [], rowCount: n.id === "a" ? 1 : 0, durationMs: 1, success: n.id === "a", error: n.id === "a" ? undefined : "fail-b",
+    })) as any);
+    expect(mixed.success).toBe(true);
+    expect(mixed.error).toBeUndefined();
+  });
+
+  it("reports success=false for an assignment whose node no longer exists", async () => {
+    const router = new FederatedQueryRouter();
+    router.setRoutingPolicy({ strategy: "round_robin", maxRetries: 0, retryBackoffMs: 1, skipUnhealthy: false, geoAffinity: false });
+    router.registerNode(makeNode({ id: "ghost" }));
+    const plan = router.planQuery({ id: "q", sql: "x", intent: "read", consistency: "eventual", targetShards: [], timeoutMs: 100 } as FederatedQuery);
+    // Remove the node AFTER planning so the assignment references a missing node.
+    (router as any).nodes.delete("ghost");
+
+    const result = await router.executePlan(plan, (async () => ({
+      nodeId: "ghost", shardIds: [], rows: [], rowCount: 0, durationMs: 0, success: true,
+    })) as any);
+    // The internal node-lookup path returns success:false (node not found),
+    // so the caller-supplied executor is never invoked for the missing node.
+    expect(result.success).toBe(false);
+    expect(result.failCount).toBe(1);
+  });
+});
+
+// ── _failover internals: remove failed node, reason string, health filter ──
+
+describe("failover plan mutation", () => {
+  it("removes the failed node from plan.assignments and records 1-based attempt", () => {
+    const router = new FederatedQueryRouter();
+    router.setRoutingPolicy({ strategy: "round_robin", maxRetries: 1, retryBackoffMs: 1, skipUnhealthy: false, geoAffinity: false });
+    router.registerNode(makeNode({ id: "fail", health: "healthy", shardIds: ["s1"] }));
+    router.registerNode(makeNode({ id: "spare", health: "healthy", shardIds: ["s1"] }));
+
+    const plan = router.planQuery({ id: "q", sql: "x", intent: "read", consistency: "eventual", targetShards: ["s1"], timeoutMs: 100 } as FederatedQuery);
+    // Plan initially targets "fail" (round_robin counter 0).
+    expect(plan.assignments.some((a) => a.nodeId === "fail")).toBe(true);
+
+    const evt = (router as any)._failover("fail", plan, 0);
+    // After failover, "fail" is removed and "spare" is pushed as fallback.
+    expect(plan.assignments.some((a) => a.nodeId === "fail")).toBe(false);
+    expect(plan.assignments.some((a) => a.nodeId === "spare")).toBe(true);
+    const fb = plan.assignments.find((a) => a.nodeId === "spare")!;
+    expect(fb.priority).toBe(99);
+    expect(fb.reason).toContain("attempt 1");
+    expect(evt.success).toBe(true);
+  });
+
+  it("excludes unhealthy candidates from failover replacement", () => {
+    const router = new FederatedQueryRouter();
+    router.setRoutingPolicy({ strategy: "round_robin", maxRetries: 1, retryBackoffMs: 1, skipUnhealthy: true, geoAffinity: false });
+    router.registerNode(makeNode({ id: "fail", health: "healthy", shardIds: ["s1"] }));
+    router.registerNode(makeNode({ id: "sick-spare", health: "unhealthy", shardIds: ["s1"] }));
+
+    const plan = router.planQuery({ id: "q", sql: "x", intent: "read", consistency: "eventual", targetShards: ["s1"], timeoutMs: 100 } as FederatedQuery);
+    const evt = (router as any)._failover("fail", plan, 0);
+    // The unhealthy node must NOT be chosen as replacement → success=false.
+    expect(evt.success).toBe(false);
+    expect(evt.failoverNodeId).toBeUndefined();
+  });
+});
+
+describe("failover health filter (skipUnhealthy=false)", () => {
+  it("single-level health filter excludes unhealthy candidate when skipUnhealthy is false", () => {
+    const router = new FederatedQueryRouter();
+    router.setRoutingPolicy({ strategy: "round_robin", maxRetries: 1, retryBackoffMs: 1, skipUnhealthy: false, geoAffinity: false });
+    router.registerNode(makeNode({ id: "fail", health: "healthy", shardIds: ["s1"] }));
+    router.registerNode(makeNode({ id: "sick-spare", health: "unhealthy", shardIds: ["s1"] }));
+
+    const plan = router.planQuery({ id: "q", sql: "x", intent: "read", consistency: "eventual", targetShards: ["s1"], timeoutMs: 100 } as FederatedQuery);
+    const evt = (router as any)._failover("fail", plan, 0);
+    // With skipUnhealthy=false there is no second filter; the `health ===
+    // "healthy"` candidates filter is the ONLY gate, so the unhealthy spare
+    // must NOT become a replacement.
+    expect(evt.success).toBe(false);
+    expect(evt.failoverNodeId).toBeUndefined();
+  });
+});
+
+describe("failover double health filter (skipUnhealthy=true)", () => {
+  it("still finds a healthy replacement when skipUnhealthy is true", () => {
+    const router = new FederatedQueryRouter();
+    router.setRoutingPolicy({ strategy: "round_robin", maxRetries: 1, retryBackoffMs: 1, skipUnhealthy: true, geoAffinity: false });
+    router.registerNode(makeNode({ id: "fail", health: "healthy", shardIds: ["s1"] }));
+    router.registerNode(makeNode({ id: "spare", health: "healthy", shardIds: ["s1"] }));
+
+    const plan = router.planQuery({ id: "q", sql: "x", intent: "read", consistency: "eventual", targetShards: ["s1"], timeoutMs: 100 } as FederatedQuery);
+    const evt = (router as any)._failover("fail", plan, 0);
+    // With skipUnhealthy=true, the L600 replacement filter runs on an already-
+    // healthy candidates set; the healthy spare must still be chosen.
+    expect(evt.success).toBe(true);
+    expect(evt.failoverNodeId).toBe("spare");
+  });
+});
+
+// ── _executePlanInternal shard grouping + fallback ──
+
+describe("shard assignment grouping", () => {
+  function makePlan(router: any, assignments: any[], queryId = "q"): any {
+    return {
+      query: { id: queryId, sql: "x", intent: "read", consistency: "eventual", targetShards: [], timeoutMs: 100 },
+      assignments,
+      strategy: "round_robin",
+      estimatedCost: 1,
+      createdAt: Date.now(),
+    };
+  }
+
+  it("groups shardIds per node (filter === nodeId)", async () => {
+    const router = new FederatedQueryRouter();
+    router.registerNode(makeNode({ id: "n1", shardIds: ["s0", "s1"] }));
+    router.registerNode(makeNode({ id: "n2", shardIds: ["s2"] }));
+
+    const received: Record<string, string[]> = {};
+    const plan = makePlan(router, [
+      { nodeId: "n1", shardIds: ["s1"], priority: 1, reason: "r" },
+      { nodeId: "n2", shardIds: ["s2"], priority: 1, reason: "r" },
+    ]);
+    await router.executePlan(plan, (async (node: any, _q: any, shardIds: string[]) => {
+      received[node.id] = shardIds;
+      return { nodeId: node.id, shardIds, rows: [], rowCount: 0, durationMs: 1, success: true };
+    }) as any);
+
+    // Each node received ONLY its own shardIds (not the union of all).
+    expect(received["n1"]).toEqual(["s1"]);
+    expect(received["n2"]).toEqual(["s2"]);
+  });
+
+  it("falls back to all node shards when an assignment has empty shardIds", async () => {
+    const router = new FederatedQueryRouter();
+    router.registerNode(makeNode({ id: "n1", shardIds: ["s0", "s1"] }));
+
+    const received: string[] = [];
+    const plan = makePlan(router, [
+      { nodeId: "n1", shardIds: [], priority: 1, reason: "r" },
+    ]);
+    await router.executePlan(plan, (async (node: any, _q: any, shardIds: string[]) => {
+      received.push(...shardIds);
+      return { nodeId: node.id, shardIds, rows: [], rowCount: 0, durationMs: 1, success: true };
+    }) as any);
+
+    // Empty assignment shardIds → fall back to ALL node shards.
+    expect(received).toEqual(["s0", "s1"]);
+  });
+});

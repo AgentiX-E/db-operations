@@ -403,6 +403,45 @@ describe("coordination completion", () => {
   });
 });
 
+// ── reference strategy + order divergence + mismatch direction ──
+
+describe("reference strategy and drift messages", () => {
+  it("latest strategy picks the numerically highest version (descending sort)", () => {
+    const f = new SchemaFederator();
+    f._setReferenceStrategy("latest");
+    // Register out of order so the sort must actually reorder: 5 > 15 > 8.
+    f.registerShard(makeSnapshot("low", [makeMigration(5)]));
+    f.registerShard(makeSnapshot("high", [makeMigration(15)]));
+    f.registerShard(makeSnapshot("mid", [makeMigration(8)]));
+
+    // Compare the lowest against the latest reference (should be version 15).
+    const drifts = f.compareAgainstReference("low");
+    const mismatch = drifts.find((d) => d.type === "version_mismatch");
+    expect(mismatch?.referenceVersion).toBe(15);
+  });
+
+  it("order divergence gate requires BOTH sides to have >1 migration", () => {
+    const f = new SchemaFederator();
+    // shard-a has 2 migrations, shard-b has only 1 → the `&&` gate must NOT
+    // fire order_divergence (it needs length>1 on BOTH sides).
+    f.registerShard(makeSnapshot("a", [makeMigration(1), makeMigration(2)]));
+    f.registerShard(makeSnapshot("b", [makeMigration(1)]));
+
+    const drifts = f.compareShards("a", "b");
+    expect(drifts.find((d) => d.type === "order_divergence")).toBeUndefined();
+  });
+
+  it("version mismatch message uses 'ahead of' when shard is ahead of reference", () => {
+    const f = new SchemaFederator();
+    f.registerShard(makeSnapshot("ahead", [makeMigration(3)]));
+    f.registerShard(makeSnapshot("ref", [makeMigration(1)]));
+
+    const drifts = f.compareShards("ahead", "ref");
+    const mismatch = drifts.find((d) => d.type === "version_mismatch");
+    expect(mismatch?.description).toContain("ahead of");
+  });
+});
+
 describe("repair error path", () => {
   it("returns success=false with error when the drift is unknown", async () => {
     const f = new SchemaFederator();

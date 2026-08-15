@@ -197,11 +197,9 @@ export class SchemaFederator implements ISchemaFederator {
       }
     }
 
-    // Update severity stats
-    for (const d of allDrifts) {
-      this.stats.driftsByType[d.type] = (this.stats.driftsByType[d.type] ?? 0) + 1;
-      this.stats.driftsBySeverity[d.severity] = (this.stats.driftsBySeverity[d.severity] ?? 0) + 1;
-    }
+    // NOTE: driftsByType / driftsBySeverity are recomputed from the authoritative
+    // `this.drifts` map inside getMonitorStats(); accumulating them here would be
+    // dead code that getMonitorStats() overwrites on every read.
 
     this.stats.activeDrifts = Array.from(this.drifts.values()).filter((d) => !d.resolved).length;
     this.stats.lastScanAt = Date.now();

@@ -4,7 +4,7 @@
  * full repair-plan boolean fields, stats counters, or scan-timing arithmetic.
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { SchemaFederator } from "../impl/SchemaFederator.js";
 import type {
   MigrationDescriptor,
@@ -66,7 +66,16 @@ describe("planRepair boolean fields", () => {
 
   it("extra_migration: always requires downtime", () => {
     const f = new SchemaFederator();
-    expect(f.planRepair(makeDrift("extra_migration", "warning", makeMigration(2))).requiresDowntime).toBe(true);
+    const p = f.planRepair(makeDrift("extra_migration", "warning", makeMigration(2)));
+    expect(p.requiresDowntime).toBe(true);
+    // warning severity is still automatable (pins the `!== "critical"` gate).
+    expect(p.automatable).toBe(true);
+  });
+
+  it("extra_migration: critical severity is not automatable", () => {
+    const f = new SchemaFederator();
+    const p = f.planRepair(makeDrift("extra_migration", "critical", makeMigration(2)));
+    expect(p.automatable).toBe(false);
   });
 
   it("checksum_divergence: not automatable, requires downtime", () => {
@@ -114,19 +123,17 @@ describe("planRepair boolean fields", () => {
 
 describe("scan timing", () => {
   it("lastScanDurationMs is the injected-clock difference", async () => {
-    let now = 100000;
-    const f = new SchemaFederator(() => now);
+    // A clock that advances 1ms per read: detectAllDrifts reads nowMs at start
+    // and again at the end, so lastScanDurationMs = 1 (end - start).
+    let now = 0;
+    const f = new SchemaFederator(() => (now += 1));
     f.registerShard(makeSnapshot("s0", [makeMigration(2)]));
     f.registerShard(makeSnapshot("s1", [makeMigration(1)]));
-
-    // Advance the injected clock by 400ms "during" the scan (detection is
-    // synchronous after the two clock reads, so advance a fixed, large value
-    // is not possible mid-call; instead assert the metric is finite and the
-    // `-` difference is correctly reported as >= 0 under the injected clock).
     await f.detectAllDrifts();
+
     const dur = f.getMonitorStats().lastScanDurationMs;
-    expect(Number.isFinite(dur)).toBe(true);
-    expect(dur).toBeGreaterThanOrEqual(0);
+    // With a +1-per-read clock and two reads, the difference is exactly 1.
+    expect(dur).toBe(1);
   });
 });
 
@@ -198,6 +205,47 @@ describe("snapshot checksum", () => {
     f.registerShard(snap);
     expect(f.getSnapshot("s0")!.chainChecksum).toBe("explicit");
   });
+
+  it("computes an exact deterministic checksum for known migrations", () => {
+    const f = new SchemaFederator();
+    const snap = makeSnapshot("s0", [makeMigration(1, "aaa")]);
+    snap.chainChecksum = "";
+    f.registerShard(snap);
+    // The checksum is a pure function of the sorted migration checksums.
+    // This exact value pins down the `(h << 5) - h + c` arithmetic and the
+    // two `i < input.length` loop bounds.
+    expect(f.getSnapshot("s0")!.chainChecksum).toBe("e779b87b5bf44f23");
+  });
+
+  it("sorts out-of-order migrations before hashing (pins the sort subtract)", () => {
+    const f = new SchemaFederator();
+    // Deliberately register [v2, v1] out of order; the checksum must sort them
+    // to [v1, v2] first, so `a.version - b.version` is observable via the hash.
+    const snap = makeSnapshot("s0", [makeMigration(2, "bbb"), makeMigration(1, "aaa")]);
+    snap.chainChecksum = "";
+    f.registerShard(snap);
+    expect(f.getSnapshot("s0")!.chainChecksum).toBe("1b60c01c33dcd213");
+  });
+});
+
+// ── null guard (`!shard || !reference`) ───────────────────────
+
+describe("compareAgainstReference null guard", () => {
+  it("returns empty when the shard is missing", () => {
+    const f = new SchemaFederator();
+    f.registerShard(makeSnapshot("s0", [makeMigration(1)]));
+    // shardId "s1" is missing, reference "s0" exists → `!shard` short-circuits.
+    const drifts = f.compareAgainstReference("s1");
+    expect(drifts).toEqual([]);
+  });
+
+  it("returns empty when the reference is missing", () => {
+    const f = new SchemaFederator();
+    // No reference registered at all → `_getReference()` returns undefined,
+    // so `!reference` short-circuits regardless of the shard's presence.
+    const drifts = f.compareAgainstReference("s1");
+    expect(drifts).toEqual([]);
+  });
 });
 
 // ── migration sort ordering (`a.version - b.version`) ───────────
@@ -216,19 +264,144 @@ describe("migration ordering", () => {
 // ── stats counters (`+ 1` / `?? 0`) ───────────────────────────
 
 describe("stats counters", () => {
-  it("driftsBySeverity counts critical and warning separately", async () => {
+  it("driftsByType counts each detected drift precisely", async () => {
     const f = new SchemaFederator();
-    f.registerShard(makeSnapshot("s0", [makeMigration(2)]));
-    f.registerShard(makeSnapshot("s1", [makeMigration(1)]));
+    const mk = (id: string, v: number) => makeSnapshot(id, [makeMigration(v)]);
+    f.registerShard(mk("s0", 2));
+    f.registerShard(mk("s1", 1));
     await f.detectAllDrifts();
-    const s = f.getMonitorStats();
-    // Two distinct shard versions produce a warning-level missing_migration.
-    const totalBySeverity = Object.values(s.driftsBySeverity).reduce((a, b) => a + b, 0);
-    expect(totalBySeverity).toBe(s.totalDriftsDetected);
+
+    const byType = f.getMonitorStats().driftsByType;
+    // s0(v2) vs s1(v1) yields exactly one drift per type for this input.
+    expect(byType["missing_migration"]).toBe(1);
+    expect(byType["extra_migration"]).toBe(1);
+    expect(byType["version_mismatch"]).toBe(1);
+
+    const bySeverity = f.getMonitorStats().driftsBySeverity;
+    const totalBySeverity = Object.values(bySeverity).reduce((a, b) => a + b, 0);
+    expect(totalBySeverity).toBe(f.getMonitorStats().totalDriftsDetected);
   });
 });
 
-// ── repair error path (`success = false` in catch) ─────────────
+// ── monitor default (`autoResolve: false`) ─────────────────────
+
+describe("monitor defaults", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("does not auto-repair when autoResolve is unset (default false)", async () => {
+    vi.useFakeTimers();
+    const f = new SchemaFederator();
+    const autoResolveSpy = vi.spyOn(f, "autoRepair").mockResolvedValue([]);
+
+    // Default config: scanIntervalMs is 60000 and autoResolve is false, so
+    // advancing the interval must NOT call autoRepair.
+    f.startMonitor();
+    vi.advanceTimersByTime(60000);
+
+    expect(autoResolveSpy).not.toHaveBeenCalled();
+    f.stopMonitor();
+  });
+
+  it("auto-repairs when autoResolve is explicitly true", async () => {
+    vi.useFakeTimers();
+    const f = new SchemaFederator();
+    const autoResolveSpy = vi.spyOn(f, "autoRepair").mockResolvedValue([]);
+
+    f.startMonitor({ scanIntervalMs: 1000, autoResolve: true });
+    vi.advanceTimersByTime(1000);
+
+    expect(autoResolveSpy).toHaveBeenCalled();
+    f.stopMonitor();
+  });
+});
+
+// ── validateSnapshot (`"rule:" + rule.name` / `resolved: false`) ──
+
+describe("validateSnapshot rules", () => {
+  it("produces a drift with referenceShardId `rule:<name>` and resolved=false", () => {
+    const f = new SchemaFederator();
+    f.registerRule({
+      name: "no_v2",
+      description: "must not use version 2",
+      enforced: true,
+      severity: "critical",
+      check: (s) => s.version < 2,
+    });
+
+    const drifts = f.validateSnapshot(makeSnapshot("s0", [makeMigration(2)]));
+    expect(drifts.length).toBe(1);
+    expect(drifts[0]!.referenceShardId).toBe("rule:no_v2");
+    expect(drifts[0]!.resolved).toBe(false);
+    expect(drifts[0]!.type).toBe("version_mismatch");
+    expect(drifts[0]!.severity).toBe("critical");
+  });
+
+  it("produces a drift for a throwing rule check", () => {
+    const f = new SchemaFederator();
+    f.registerRule({
+      name: "boom_rule",
+      description: "throws",
+      enforced: true,
+      severity: "warning",
+      check: () => {
+        throw new Error("boom");
+      },
+    });
+
+    const drifts = f.validateSnapshot(makeSnapshot("s0", [makeMigration(1)]));
+    expect(drifts.length).toBe(1);
+    expect(drifts[0]!.referenceShardId).toBe("rule:boom_rule");
+    expect(drifts[0]!.resolved).toBe(false);
+    expect(drifts[0]!.description).toContain("threw an error");
+  });
+});
+
+// ── coordination completion gate (`&&` / `===` / `||` in reportShardResult) ──
+
+describe("coordination completion", () => {
+  it("completes directly when verifyAfterApply is false", () => {
+    const f = new SchemaFederator();
+    f.registerShard(makeSnapshot("s1", [makeMigration(1)]));
+    f.registerShard(makeSnapshot("s2", [makeMigration(1)]));
+
+    // verify=false: after all shards succeed, the coordinator skips the
+    // "verifying" branch and jumps straight to "completed" (the `&&`/`||`
+    // and `===` gate in the third else-if).
+    const coord = f.startCoordinatedMigration(
+      { currentVersion: 1, targetVersion: 2, pending: [] },
+      "all",
+      false,
+    );
+
+    f.reportShardResult(coord.id, { shardId: "s1", version: 2, success: true, durationMs: 100 });
+    f.reportShardResult(coord.id, { shardId: "s2", version: 2, success: true, durationMs: 100 });
+
+    expect(f.getCoordinationState(coord.id)!.state).toBe("completed");
+  });
+
+  it("completes after verifying when verifyAfterApply is true", () => {
+    const f = new SchemaFederator();
+    f.registerShard(makeSnapshot("s1", [makeMigration(1)]));
+    f.registerShard(makeSnapshot("s2", [makeMigration(1)]));
+
+    const coord = f.startCoordinatedMigration(
+      { currentVersion: 1, targetVersion: 2, pending: [] },
+      "all",
+      true,
+    );
+
+    f.reportShardResult(coord.id, { shardId: "s1", version: 2, success: true, durationMs: 100 });
+    f.reportShardResult(coord.id, { shardId: "s2", version: 2, success: true, durationMs: 100 });
+    expect(f.getCoordinationState(coord.id)!.state).toBe("verifying");
+
+    // Once verifying and all results are in, the third else-if advances to
+    // "completed" (pins the `state === "verifying"` comparison).
+    f.reportShardResult(coord.id, { shardId: "s1", version: 2, success: true, durationMs: 5 });
+    expect(f.getCoordinationState(coord.id)!.state).toBe("completed");
+  });
+});
 
 describe("repair error path", () => {
   it("returns success=false with error when the drift is unknown", async () => {
@@ -239,6 +412,26 @@ describe("repair error path", () => {
     const r = await f.executeRepair(plan);
     expect(r.success).toBe(false);
     expect(r.error).toBeDefined();
+  });
+
+  it("catches a throwing repair executor and sets success=false", async () => {
+    const f = new SchemaFederator();
+    f.registerShard(makeSnapshot("s0", [makeMigration(2)]));
+    f.registerShard(makeSnapshot("s1", [makeMigration(1)]));
+    await f.detectAllDrifts();
+
+    const drift = f.getActiveDrifts()[0]!;
+    const plan = f.planRepair(drift);
+
+    // Inject a repair executor that throws: executeRepair must catch it and
+    // set success=false with the thrown error message (pins the catch branch).
+    f._setRepairExecutor(async () => {
+      throw new Error("boom");
+    });
+
+    const r = await f.executeRepair(plan);
+    expect(r.success).toBe(false);
+    expect(r.error).toBe("boom");
   });
 
   it("returns success=true for a resolvable drift", async () => {

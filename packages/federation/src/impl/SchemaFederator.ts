@@ -103,6 +103,15 @@ export class SchemaFederator implements ISchemaFederator {
   private monitorTimer: ReturnType<typeof setInterval> | null = null;
   private stats: DriftMonitorStats = emptyStats();
 
+  // Injectable wall-clock for deterministic scan-duration timing. Defaults to
+  // the real Date.now(); tests inject a fake clock so `nowMs() - start`
+  // (lastScanDurationMs) becomes precisely assertable.
+  private readonly _nowMs: () => number;
+
+  constructor(nowMs?: () => number) {
+    this._nowMs = nowMs ?? Date.now;
+  }
+
   // ── Snapshots ──────────────────────────────────────────
 
   async captureSnapshot(shardId: string): Promise<SchemaSnapshot> {
@@ -112,9 +121,7 @@ export class SchemaFederator implements ISchemaFederator {
       : { shardId, version: 0, migrations: [], chainChecksum: "", capturedAt: Date.now() };
 
     snapshot.capturedAt = Date.now();
-    if (!snapshot.chainChecksum && snapshot.migrations) {
-      snapshot.chainChecksum = computeChainChecksum(snapshot.migrations);
-    }
+    this._ensureChecksum(snapshot);
     this.snapshots.set(shardId, snapshot);
     return snapshot;
   }
@@ -124,10 +131,19 @@ export class SchemaFederator implements ISchemaFederator {
   }
 
   registerShard(snapshot: SchemaSnapshot): void {
+    this._ensureChecksum(snapshot);
+    this.snapshots.set(snapshot.shardId, snapshot);
+  }
+
+  /**
+   * Backfill a checksum when it is absent but migrations are present.
+   * A snapshot with a missing checksum AND no migrations gets no checksum
+   * (nothing to hash); a snapshot with an explicit checksum is left untouched.
+   */
+  private _ensureChecksum(snapshot: SchemaSnapshot): void {
     if (!snapshot.chainChecksum && snapshot.migrations) {
       snapshot.chainChecksum = computeChainChecksum(snapshot.migrations);
     }
-    this.snapshots.set(snapshot.shardId, snapshot);
   }
 
   // ── Comparison ─────────────────────────────────────────
@@ -158,7 +174,7 @@ export class SchemaFederator implements ISchemaFederator {
   // ── Drift Detection ────────────────────────────────────
 
   async detectAllDrifts(): Promise<SchemaDrift[]> {
-    const start = Date.now();
+    const start = this._nowMs();
     this.stats.totalScans++;
 
     const shards = Array.from(this.snapshots.values());
@@ -189,7 +205,7 @@ export class SchemaFederator implements ISchemaFederator {
 
     this.stats.activeDrifts = Array.from(this.drifts.values()).filter((d) => !d.resolved).length;
     this.stats.lastScanAt = Date.now();
-    this.stats.lastScanDurationMs = Date.now() - start;
+    this.stats.lastScanDurationMs = this._nowMs() - start;
 
     return allDrifts;
   }
@@ -649,7 +665,12 @@ export class SchemaFederator implements ISchemaFederator {
     /** If true, auto-persist to this.drifts. False for stateless comparison calls. */
     persist = false,
   ): SchemaDrift {
-    const id = nextDriftId();
+    // Deterministic id so repeated detection of the SAME drift is idempotent:
+    // `detectAllDrifts` dedupes via `this.drifts.has(id)`, which only works if
+    // equal drifts yield equal ids. A timestamp/sequence id would change on
+    // every scan and cause totalDriftsDetected/driftsByType to double-count and
+    // the internal map to grow unboundedly.
+    const id = `drift:${shardId}:${base.type}:${base.driftedVersion}:${base.referenceVersion}`;
     const drift: SchemaDrift = {
       id,
       type: base.type,

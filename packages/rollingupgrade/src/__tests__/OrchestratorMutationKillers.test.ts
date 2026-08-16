@@ -582,3 +582,4 @@ describe('rollingupgrade fractional batchSize', () => {
       .rejects.toThrow('batchSize');
   });
 });
+

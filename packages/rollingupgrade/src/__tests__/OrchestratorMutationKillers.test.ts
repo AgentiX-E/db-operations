@@ -442,3 +442,119 @@ describe('rollingupgrade fixed_size batchSize validation', () => {
       .rejects.toThrow('batchSize');
   });
 });
+
+describe('rollingupgrade canary bake sleep', () => {
+  it('does not sleep for bake when bakeTimeMs is zero', async () => {
+    const sleeps: number[] = [];
+    const e = new RollingUpgradeOrchestrator({
+      minBakeMs: 0,
+      sleep: async (ms: number) => { sleeps.push(ms); },
+    });
+    e.registerHealthCheck('ok', healthy);
+    await e.execute(makePlan({
+      nodes: ['a'],
+      healthCheckNames: ['ok'],
+      canary: { fraction: 1, bakeTimeMs: 0, requiredChecks: [], autoPromote: true },
+      drain: { timeoutMs: 1, waitForInflight: false, connectionDrainMs: 1 },
+    }));
+    // waitForInflight=false removes the drain sleep; the only remaining sleep
+    // is the drain yield sleep(0). bakeTimeMs=0 must NOT add another sleep.
+    expect(sleeps.filter((ms) => ms === 0).length).toBe(1);
+  });
+
+  it('sleeps for the bake time when bakeTimeMs is positive', async () => {
+    const sleeps: number[] = [];
+    const e = new RollingUpgradeOrchestrator({
+      minBakeMs: 0,
+      sleep: async (ms: number) => { sleeps.push(ms); },
+    });
+    e.registerHealthCheck('ok', healthy);
+    await e.execute(makePlan({
+      nodes: ['a'],
+      healthCheckNames: ['ok'],
+      canary: { fraction: 1, bakeTimeMs: 123, requiredChecks: [], autoPromote: true },
+      drain: { timeoutMs: 1, waitForInflight: false, connectionDrainMs: 1 },
+    }));
+    // The canary bake sleep of 123ms must fire (beyond the drain yield 0).
+    expect(sleeps).toContain(123);
+  });
+});
+
+
+describe('rollingupgrade pause/resume state', () => {
+  it('pause sets paused=true and resume sets paused=false', async () => {
+    const e = engine();
+    await e.pause();
+    expect((e as any).paused).toBe(true);
+    await e.resume();
+    expect((e as any).paused).toBe(false);
+  });
+
+  it('execute begins from an unpaused state even after a prior pause', async () => {
+    const e = engine();
+    e.registerHealthCheck('ok', healthy);
+    // Prior pause leaves paused=true; execute must reset it to false so the
+    // rolling loop does not block on the pause gate.
+    await e.pause();
+    const s = await e.execute(makePlan({ nodes: ['a', 'b'], batchSize: 1, healthCheckNames: ['ok'] }));
+    expect(s.phase).toBe('completed');
+    expect((e as any).paused).toBe(false);
+  });
+});
+
+describe('rollingupgrade rollback trigger precision', () => {
+  it('on_canary_failure rolls back when canary fails', async () => {
+    const e = engine();
+    e.registerHealthCheck('bad', unhealthy);
+    const s = await e.execute(makePlan({
+      nodes: ['c0', 'c1', 'r0'],
+      batchSize: 1,
+      healthCheckNames: ['bad'],
+      rollbackTrigger: 'on_canary_failure',
+      canary: { fraction: 0.5, bakeTimeMs: 0, requiredChecks: [], autoPromote: true },
+    }));
+    expect(s.phase).toBe('failed');
+  });
+
+  it('on_degradation triggers rollback on failure (degradation policy)', async () => {
+    const e = engine();
+    e.registerHealthCheck('bad', unhealthy);
+    const s = await e.execute(makePlan({
+      nodes: ['a', 'b'],
+      batchSize: 1,
+      healthCheckNames: ['bad'],
+      rollbackTrigger: 'on_degradation',
+    }));
+    expect(s.phase).toBe('failed');
+  });
+});
+
+
+
+describe('rollingupgrade rollback trigger observable rollback', () => {
+  it('on_canary_failure emits rollback_triggered event', async () => {
+    const e = engine();
+    e.registerHealthCheck('bad', unhealthy);
+    await e.execute(makePlan({
+      nodes: ['c0', 'r0'],
+      batchSize: 1,
+      healthCheckNames: ['bad'],
+      rollbackTrigger: 'on_canary_failure',
+      canary: { fraction: 0.5, bakeTimeMs: 0, requiredChecks: [], autoPromote: true },
+    }));
+    const types = e.getEvents().map((ev) => ev.type);
+    expect(types).toContain('rollback_triggered');
+  });
+
+  it('on_degradation emits rollback_triggered event', async () => {
+    const e = engine();
+    e.registerHealthCheck('bad', unhealthy);
+    await e.execute(makePlan({
+      nodes: ['a', 'b'],
+      batchSize: 1,
+      healthCheckNames: ['bad'],
+      rollbackTrigger: 'on_degradation',
+    }));
+    expect(e.getEvents().map((ev) => ev.type)).toContain('rollback_triggered');
+  });
+});

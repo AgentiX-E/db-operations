@@ -100,7 +100,15 @@ export class RollingUpgradeOrchestrator implements IRollingUpgrade {
     for (const batch of this.batches) {
       if (batch.status === "completed" || batch.status === "running") {
         for (const node of batch.nodes) {
-          if (node.status === "completed" || node.status === "running") {
+          // Roll back any node that has begun progressing (in-flight states)
+          // or already completed. `failed` nodes are left as-is — they never
+          // reached a healthy state, so there is nothing to roll back.
+          if (
+            node.status === "completed" ||
+            node.status === "draining" ||
+            node.status === "upgrading" ||
+            node.status === "health_check"
+          ) {
             node.status = "rolled_back";
             node.completedAt = Date.now();
             rolledBack++;
@@ -133,7 +141,7 @@ export class RollingUpgradeOrchestrator implements IRollingUpgrade {
     this.startTime = Date.now();
     this.batches = this._buildBatches();
     this.events = [];
-    this.paused = true;
+    this.paused = false;
     this.phase = "validating";
 
     this._emit("plan_validated", {
@@ -509,7 +517,12 @@ export class RollingUpgradeOrchestrator implements IRollingUpgrade {
     for (const batch of this.batches) {
       if (batch.status === "completed" || batch.status === "running") {
         for (const node of batch.nodes) {
-          if (node.status === "completed" || node.status === "running") {
+          if (
+            node.status === "completed" ||
+            node.status === "draining" ||
+            node.status === "upgrading" ||
+            node.status === "health_check"
+          ) {
             node.status = "rolled_back";
             node.completedAt = Date.now();
           }

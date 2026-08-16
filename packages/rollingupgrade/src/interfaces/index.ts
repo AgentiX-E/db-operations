@@ -11,6 +11,9 @@ import type {
   UpgradePhase,
   UpgradeBatch,
   BatchHealth,
+  NodeUpgradeState,
+  CanaryConfig,
+  DrainConfig,
 } from "./types.js";
 
 export type {
@@ -20,6 +23,9 @@ export type {
   UpgradePhase,
   UpgradeBatch,
   BatchHealth,
+  NodeUpgradeState,
+  CanaryConfig,
+  DrainConfig,
 };
 
 /**

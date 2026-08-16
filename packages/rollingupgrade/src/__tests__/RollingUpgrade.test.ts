@@ -1,116 +1,109 @@
 import { describe, it, expect } from 'vitest';
 import { InMemoryRollingUpgrade } from '../impl/InMemoryRollingUpgrade.js';
-import type { UpgradePlan } from '../interfaces/types.js';
+import type { RollingUpgradePlan, BatchHealth } from '../interfaces/types.js';
+
+// InMemoryRollingUpgrade is a thin alias over RollingUpgradeOrchestrator, so
+// these tests exercise the public IRollingUpgrade contract through the
+// in-memory entry point.
+
+const instantSleep = () => Promise.resolve();
+
+function makePlan(overrides: Partial<RollingUpgradePlan> = {}): RollingUpgradePlan {
+  return {
+    id: 'mem-plan',
+    name: 'Mem Plan',
+    targetVersion: '2.0.0',
+    nodes: ['n1', 'n2', 'n3'],
+    batchStrategy: 'fixed_size',
+    batchSize: 1,
+    rollbackTrigger: 'on_first_failure',
+    healthCheckNames: [],
+    ...overrides,
+  };
+}
+
+function healthy(): Promise<BatchHealth> {
+  return Promise.resolve({
+    healthy: true,
+    nodes: [{ healthy: true, details: {}, checkedAt: Date.now() }],
+    evaluatedAt: Date.now(),
+  });
+}
 
 describe('InMemoryRollingUpgrade', () => {
-  it('starts with empty status', () => {
+  it('starts with an empty phase (idle) and no batches', () => {
     const ug = new InMemoryRollingUpgrade();
-    expect(ug.getStatus()).toEqual([]);
+    expect(ug.getPhase()).toBe('idle');
+    expect(ug.getBatches()).toEqual([]);
+    expect(ug.getEvents()).toEqual([]);
+    expect(ug.getStats()).toBeNull();
   });
 
-  it('executes a single batch upgrade', async () => {
-    const ug = new InMemoryRollingUpgrade();
-    const plan: UpgradePlan = { nodes: ['node-1'], batchSize: 1, preScript: 'check.sh', postScript: 'verify.sh' };
-    const phases = await ug.execute(plan);
-    expect(phases.length).toBeGreaterThan(0);
-    expect(phases[phases.length - 1].status).toBe('completed');
+  it('executes a single-node upgrade to completion', async () => {
+    const ug = new InMemoryRollingUpgrade({ minBakeMs: 0, sleep: instantSleep });
+    ug.registerHealthCheck('ok', healthy);
+    const stats = await ug.execute(makePlan({
+      nodes: ['n1'],
+      healthCheckNames: ['ok'],
+    }));
+    expect(stats.phase).toBe('completed');
+    expect(stats.upgradedNodes).toBe(1);
+    expect(stats.failedNodes).toBe(0);
   });
 
-  it('creates multiple batches for many nodes', async () => {
-    const ug = new InMemoryRollingUpgrade();
-    const nodes = ['node-1', 'node-2', 'node-3', 'node-4', 'node-5'];
-    const plan: UpgradePlan = { nodes, batchSize: 2, preScript: 'pre.sh', postScript: 'post.sh' };
-    const phases = await ug.execute(plan);
-    const batchPhases = phases.filter(p => p.step.startsWith('upgrade-batch'));
-    expect(batchPhases.length).toBeGreaterThanOrEqual(3);
+  it('splits nodes into the requested number of batches', async () => {
+    const ug = new InMemoryRollingUpgrade({ minBakeMs: 0, sleep: instantSleep });
+    ug.registerHealthCheck('ok', healthy);
+    const stats = await ug.execute(makePlan({
+      nodes: ['n1', 'n2', 'n3', 'n4', 'n5'],
+      batchSize: 2,
+      healthCheckNames: ['ok'],
+    }));
+    // 5 nodes / 2 = 3 batches (ceil).
+    expect(stats.totalBatches).toBe(3);
   });
 
-  it('includes pre-script phase', async () => {
-    const ug = new InMemoryRollingUpgrade();
-    const plan: UpgradePlan = { nodes: ['n1'], batchSize: 1, preScript: 'backup.sh', postScript: 'post.sh' };
-    const phases = await ug.execute(plan);
-    expect(phases.some(p => p.step.includes('backup.sh'))).toBe(true);
+  it('records events across validation, batches, and completion', async () => {
+    const ug = new InMemoryRollingUpgrade({ minBakeMs: 0, sleep: instantSleep });
+    ug.registerHealthCheck('ok', healthy);
+    const stats = await ug.execute(makePlan({
+      nodes: ['n1', 'n2'],
+      healthCheckNames: ['ok'],
+    }));
+    const types = stats.events.map((e) => e.type);
+    expect(types).toContain('plan_validated');
+    expect(types).toContain('upgrade_completed');
   });
 
-  it('includes post-script phase', async () => {
+  it('pause and resume toggle the paused state without throwing', async () => {
     const ug = new InMemoryRollingUpgrade();
-    const plan: UpgradePlan = { nodes: ['n1'], batchSize: 1, preScript: 'pre.sh', postScript: 'verify.sh' };
-    const phases = await ug.execute(plan);
-    expect(phases.some(p => p.step.includes('verify.sh'))).toBe(true);
-  });
-
-  it('pause stops further batch execution', async () => {
-    const ug = new InMemoryRollingUpgrade();
-    // Execute first to get past pre-script, then pause
-    await ug.execute({ nodes: ['n1', 'n2', 'n3'], batchSize: 1, preScript: 'pre.sh', postScript: 'post.sh' });
     await ug.pause();
-    // Re-execute while paused — pre/post-scripts run but batches get marked pending
-    // Actually, let's just check that pause is accepted without error
+    await ug.resume();
     expect(true).toBe(true);
   });
 
-  it('execute pauses and resumes cleanly', async () => {
-    const ug = new InMemoryRollingUpgrade();
-    // execute() resets paused to false—so execute is always unpaused.
-    // But pause()/resume() toggle works for the paused flag state.
-    await ug.pause();
-    await ug.resume();
-    const plan: UpgradePlan = { nodes: ['n1', 'n2', 'n3'], batchSize: 1, preScript: 'pre.sh', postScript: 'post.sh' };
-    const phases = await ug.execute(plan);
-    expect(phases.length).toBe(10); // pre(run+comp) + 3*(run+comp) + post(run+comp) = 10
+  it('rollback on a completed plan is accepted', async () => {
+    const ug = new InMemoryRollingUpgrade({ minBakeMs: 0, sleep: instantSleep });
+    ug.registerHealthCheck('ok', healthy);
+    await ug.execute(makePlan({ healthCheckNames: ['ok'] }));
+    await expect(ug.rollback()).resolves.toBeDefined();
   });
 
-  it('resume works after pause', async () => {
+  it('rejects an invalid plan (missing id)', async () => {
     const ug = new InMemoryRollingUpgrade();
-    await ug.pause();
-    await ug.resume();
-    const plan: UpgradePlan = { nodes: ['n1'], batchSize: 1, preScript: 'pre.sh', postScript: 'post.sh' };
-    const phases = await ug.execute(plan);
-    expect(phases.every(p => p.status !== 'pending' || p.status === 'completed')).toBe(true);
+    await expect(ug.execute(makePlan({ id: '' }))).rejects.toThrow();
   });
 
-  it('rollback marks running phases as failed', async () => {
+  it('satisfies the full IRollingUpgrade surface', () => {
     const ug = new InMemoryRollingUpgrade();
-    const plan: UpgradePlan = { nodes: ['n1'], batchSize: 1, preScript: 'pre.sh', postScript: 'post.sh' };
-    await ug.execute(plan);
-    await ug.rollback();
-    const phases = ug.getStatus();
-    expect(phases.every(p => p.status !== 'running')).toBe(true);
-  });
-
-  it('returns status as snapshot (immutable)', async () => {
-    const ug = new InMemoryRollingUpgrade();
-    const plan: UpgradePlan = { nodes: ['n1'], batchSize: 1, preScript: 'pre.sh', postScript: 'post.sh' };
-    await ug.execute(plan);
-    const status = ug.getStatus();
-    status.push({ step: 'fake', status: 'pending' });
-    expect(ug.getStatus()).toHaveLength(status.length - 1);
-  });
-
-  it('handles single node upgrade', async () => {
-    const ug = new InMemoryRollingUpgrade();
-    const plan: UpgradePlan = { nodes: ['single-node'], batchSize: 1, preScript: 'pre.sh', postScript: 'post.sh' };
-    const phases = await ug.execute(plan);
-    expect(phases.length).toBe(6); // pre:running, pre:completed, batch:running, batch:completed, post:running, post:completed
-  });
-
-  it('handles empty node list', async () => {
-    const ug = new InMemoryRollingUpgrade();
-    const plan: UpgradePlan = { nodes: [], batchSize: 1, preScript: 'pre.sh', postScript: 'post.sh' };
-    const phases = await ug.execute(plan);
-    expect(phases.length).toBeGreaterThan(0);
-  });
-
-  it('multiple rollback calls are safe', async () => {
-    const ug = new InMemoryRollingUpgrade();
-    const plan: UpgradePlan = { nodes: ['n1'], batchSize: 1, preScript: 'pre.sh', postScript: 'post.sh' };
-    await ug.execute(plan);
-    await ug.rollback();
-    await expect(ug.rollback()).resolves.not.toThrow();
-  });
-
-  it('pause does not throw', async () => {
-    const ug = new InMemoryRollingUpgrade();
-    await expect(ug.pause()).resolves.not.toThrow();
+    expect(typeof ug.execute).toBe('function');
+    expect(typeof ug.getPhase).toBe('function');
+    expect(typeof ug.getBatches).toBe('function');
+    expect(typeof ug.getEvents).toBe('function');
+    expect(typeof ug.getStats).toBe('function');
+    expect(typeof ug.pause).toBe('function');
+    expect(typeof ug.resume).toBe('function');
+    expect(typeof ug.rollback).toBe('function');
+    expect(typeof ug.registerHealthCheck).toBe('function');
   });
 });

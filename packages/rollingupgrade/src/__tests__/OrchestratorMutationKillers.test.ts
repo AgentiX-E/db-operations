@@ -558,3 +558,27 @@ describe('rollingupgrade rollback trigger observable rollback', () => {
     expect(e.getEvents().map((ev) => ev.type)).toContain('rollback_triggered');
   });
 });
+
+describe('rollingupgrade validation short-circuit', () => {
+  it('rejects when id is empty but nodes are present', async () => {
+    const e = engine();
+    await expect(e.execute(makePlan({ id: '', nodes: ['a', 'b'] })))
+      .rejects.toThrow();
+  });
+
+  it('rejects when canary fraction is zero (not positive)', async () => {
+    const e = engine();
+    await expect(e.execute(makePlan({
+      canary: { fraction: 0, bakeTimeMs: 100, requiredChecks: [], autoPromote: true },
+    }))).rejects.toThrow();
+  });
+});
+
+describe('rollingupgrade fractional batchSize', () => {
+  it('rejects fixed_size with a fractional batchSize below 1', async () => {
+    const e = engine();
+    // 0.5 < 1 is true → invalid. Mutating < to >= would accept 0.5.
+    await expect(e.execute(makePlan({ batchStrategy: 'fixed_size', batchSize: 0.5 })))
+      .rejects.toThrow('batchSize');
+  });
+});

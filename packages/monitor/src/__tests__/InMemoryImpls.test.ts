@@ -460,6 +460,49 @@ describe('InMemoryAlertRuleManager', () => {
     manager.clearRules();
     expect(manager.getRules()).toHaveLength(0);
   });
+
+  it('removeRule returns true', () => {
+    const manager = new InMemoryAlertRuleManager();
+    manager.addRule({ id: 'r1', name: 'A', metric: 'a', condition: 'gt', threshold: 10, durationMs: 1000, severity: 'info', enabled: true });
+    expect(manager.removeRule('r1')).toBe(true);
+  });
+
+  it.each([
+    ['gt', { value: 20, threshold: 10 }, true],
+    ['gt', { value: 10, threshold: 10 }, false],
+    ['lt', { value: 5, threshold: 10 }, true],
+    ['lt', { value: 10, threshold: 10 }, false],
+    ['eq', { value: 10, threshold: 10 }, true],
+    ['eq', { value: 11, threshold: 10 }, false],
+    ['gte', { value: 10, threshold: 10 }, true],
+    ['gte', { value: 9, threshold: 10 }, false],
+    ['lte', { value: 10, threshold: 10 }, true],
+    ['lte', { value: 11, threshold: 10 }, false],
+  ])('evaluateSnapshot honors %s condition (%o)', (condition, { value, threshold }, expected) => {
+    const manager = new InMemoryAlertRuleManager();
+    manager.addRule({ id: 'r1', name: 'Test', metric: 'm', condition: condition as any, threshold, durationMs: 1000, severity: 'info', enabled: true });
+    const triggered = manager.evaluateSnapshot({ m: value });
+    expect(triggered.length > 0).toBe(expected);
+  });
+
+  it('evaluateSnapshot falls back to gte for unknown condition', () => {
+    const manager = new InMemoryAlertRuleManager();
+    manager.addRule({ id: 'r1', name: 'Test', metric: 'm', condition: 'unknown' as any, threshold: 10, durationMs: 1000, severity: 'info', enabled: true });
+    // default branch: value >= threshold
+    expect(manager.evaluateSnapshot({ m: 15 }).length).toBe(1);
+    expect(manager.evaluateSnapshot({ m: 5 }).length).toBe(0);
+  });
+
+  it('evaluateSnapshot fires again after silence expires', () => {
+    const manager = new InMemoryAlertRuleManager();
+    manager.addRule({ id: 'r1', name: 'CPU', metric: 'cpu', condition: 'gt', threshold: 90, durationMs: 60000, severity: 'critical', enabled: true });
+
+    // Negative duration makes silencedUntil already in the past → expired.
+    manager.silenceRule('r1', -1000);
+    const triggered = manager.evaluateSnapshot({ cpu: 95 });
+    // Expired silence must not suppress the alert.
+    expect(triggered).toHaveLength(1);
+  });
 });
 
 // ── InMemoryResourceQuotaManager ──

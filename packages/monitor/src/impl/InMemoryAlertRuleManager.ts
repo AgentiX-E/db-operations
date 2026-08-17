@@ -56,23 +56,13 @@ export class InMemoryAlertRuleManager {
 
   /**
    * Evaluate all rules and return triggered alerts.
+   *
+   * This no-argument overload cannot resolve metric values without a snapshot;
+   * rules are therefore only evaluated via {@link evaluateSnapshot}. Returns an
+   * empty list to honour the interface contract.
    */
   evaluate(): Promise<TriggeredAlert[]> {
-    const triggered: TriggeredAlert[] = [];
-    const now = Date.now();
-
-    for (const [id, entry] of this._rules) {
-      if (!entry.enabled) continue;
-
-      // Check silence
-      const silencedUntil = this._silencedUntil.get(id);
-      if (silencedUntil && now < silencedUntil) continue;
-
-      // In-memory mode without external snapshot: skip evaluation
-      // Use evaluate(snapshot) instead
-    }
-
-    return Promise.resolve(triggered);
+    return Promise.resolve([]);
   }
 
   /**
@@ -138,7 +128,7 @@ export class InMemoryAlertRuleManager {
 
       if (currentValue === undefined) continue;
 
-      let isTriggered = false;
+      let isTriggered: boolean;
       switch (rule.condition) {
         case 'gt': isTriggered = currentValue > rule.threshold; break;
         case 'lt': isTriggered = currentValue < rule.threshold; break;

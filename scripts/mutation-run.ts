@@ -237,7 +237,7 @@ function runTests(testFiles: string[]): Promise<{ killed: boolean; durationMs: n
 
   return new Promise((resolve) => {
     exec(
-      `npx vitest run --pool=forks ${paths} 2>&1`,
+      `npx vitest run --pool=threads --no-file-parallelism ${paths} 2>&1`,
       {
         cwd: ROOT,
         encoding: 'utf-8',

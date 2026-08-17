@@ -98,14 +98,37 @@ function discoverFiles(pkgFilter?: string): string[] {
   for (const pkg of readdirSync(pkgDir)) {
     if (pkgFilter && pkg !== pkgFilter) continue;
     const implDir = join(pkgDir, pkg, 'src', 'impl');
-    if (!existsSync(implDir)) continue;
-    walk(implDir, (f) => {
-      if (f.endsWith('.ts') && !f.endsWith('.d.ts') && !f.includes('.test.') && !f.includes('.spec.')) {
-        // Skip files that require network I/O (S3, etc.)
-        if (f.includes('S3StorageBackend') || f.includes('S3')) return;
-        files.push(f);
+    const srcDir = join(pkgDir, pkg, 'src');
+
+    // Preferred: the conventional `src/impl/` layout. Fallback: packages (e.g.
+    // `core`) that keep their logic directly under `src/` without an impl dir.
+    const roots: string[] = [];
+    if (existsSync(implDir)) {
+      roots.push(implDir);
+    } else if (existsSync(srcDir)) {
+      // Only consider top-level .ts source files; skip the canonical re-export
+      // barrel (`index.ts`) which has no mutatable logic.
+      for (const e of readdirSync(srcDir)) {
+        const full = join(srcDir, e);
+        if (statSync(full).isFile() && e.endsWith('.ts') && !e.endsWith('.d.ts') && e !== 'index.ts') {
+          roots.push(full);
+        }
       }
-    });
+    }
+
+    for (const root of roots) {
+      if (statSync(root).isFile()) {
+        if (!root.includes('.test.') && !root.includes('.spec.')) files.push(root);
+      } else {
+        walk(root, (f) => {
+          if (f.endsWith('.ts') && !f.endsWith('.d.ts') && !f.includes('.test.') && !f.includes('.spec.')) {
+            // Skip files that require network I/O (S3, etc.)
+            if (f.includes('S3StorageBackend') || f.includes('S3')) return;
+            files.push(f);
+          }
+        });
+      }
+    }
   }
   return files;
 }

@@ -353,4 +353,28 @@ describe('ProviderRegistry lifecycle', () => {
 
     expect(registry.get(ITestService).greet()).toBe('NoLifecycle, world!');
   });
+
+  it('should NOT treat an instance with only providerId as lifecycle-managed', async () => {
+    // Partial shape: has providerId but lacks start/stop. Must NOT be tracked.
+    const partial = { providerId: 'partial-id' } as unknown as ITestService;
+    registry.register(ITestService, partial);
+
+    await registry.start();
+    await registry.stop();
+    // No start/stop should have been invoked; registration still resolves.
+    expect(registry.get(ITestService)).toBe(partial);
+  });
+
+  it('should NOT treat an instance with start but no stop as lifecycle-managed', async () => {
+    // Partial shape: has providerId + start but lacks stop. Must NOT be tracked.
+    const partial = {
+      providerId: 'partial-no-stop',
+      start: async () => {},
+    } as unknown as ITestService;
+    registry.register(ITestService, partial);
+
+    await registry.start();
+    await registry.stop();
+    expect(registry.get(ITestService)).toBe(partial);
+  });
 });

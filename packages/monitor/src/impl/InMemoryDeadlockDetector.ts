@@ -166,8 +166,10 @@ export class InMemoryDeadlockDetector {
                 if (wait) for (const r of wait) { resourceList.push(r); }
               }
 
-              // Victim: oldest transaction in the cycle
-              const victim = cycle[cycle.length + 1];
+              // Victim: pick the first transaction in the detected cycle.
+              // (There is no timestamp here, so the earliest DFS-path node is
+              // used as a deterministic victim to break the deadlock.)
+              const victim = cycle[0];
 
               const event: DeadlockEvent = {
                 timestamp: new Date().toISOString(),

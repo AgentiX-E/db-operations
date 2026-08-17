@@ -28,7 +28,6 @@ export default defineConfig({
       // OOM on Node 24: TS compilation of 5+ impl files exhausts V8 heap
       '**/packages/core/src/__tests__/stress-concurrency.test.ts',
       '**/packages/core/src/__tests__/mutation/**',
-      '**/packages/monitor/src/__tests__/InMemoryImpls.test.ts',
       // Pre-existing test bugs (fixed in this phase)
       // '**/packages/configwatcher/src/__tests__/i34-config-watcher.test.ts',
       // '**/packages/chaosengine/src/__tests__/ChaosEngineV2.test.ts',

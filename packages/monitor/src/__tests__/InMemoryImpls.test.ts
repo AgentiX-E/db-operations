@@ -335,6 +335,15 @@ describe('InMemoryConnectionMonitor', () => {
     expect(connections[0].id).toBe('c1');
   });
 
+  it('removeConnection deletes a tracked connection', async () => {
+    const monitor = new InMemoryConnectionMonitor();
+    monitor.addConnection({ id: 'c1', user: 'admin', database: 'prod', state: 'active', connectedAt: new Date(), idleInTransaction: false });
+    expect(await monitor.getConnections()).toHaveLength(1);
+
+    monitor.removeConnection('c1');
+    expect(await monitor.getConnections()).toHaveLength(0);
+  });
+
   it('reportConnectionClosed decrements active to zero', () => {
     const monitor = new InMemoryConnectionMonitor();
     monitor.reportConnectionOpened('pool-1');
@@ -440,6 +449,21 @@ describe('InMemoryAlertRuleManager', () => {
     await manager.updateRule('r1', { threshold: 95 });
     const rules = manager.getRules();
     expect(rules[0].threshold).toBe(95);
+  });
+
+  it('updateRule rejects when rule does not exist', async () => {
+    const manager = new InMemoryAlertRuleManager();
+    await expect(manager.updateRule('missing', { threshold: 1 })).rejects.toThrow('Rule not found');
+  });
+
+  it('deleteRule removes the rule and its silence', () => {
+    const manager = new InMemoryAlertRuleManager();
+    manager.addRule({ id: 'r1', name: 'CPU', metric: 'cpu', condition: 'gt', threshold: 90, durationMs: 60000, severity: 'critical', enabled: true });
+    manager.silenceRule('r1', 10000);
+    manager.deleteRule('r1');
+    expect(manager.getRules()).toHaveLength(0);
+    // After deletion, evaluating with a matching value must not trigger.
+    expect(manager.evaluateSnapshot({ cpu: 95 })).toHaveLength(0);
   });
 
   it('silenceRule prevents triggering', () => {
@@ -610,6 +634,22 @@ describe('InMemoryResourceQuotaManager', () => {
     expect(usage.memoryMB).toBe(2048);
     expect(usage.connections).toBe(20);
     expect(usage.queryRate).toBe(500);
+  });
+
+  it('getUsage returns zeros for an unknown role', async () => {
+    const manager = new InMemoryResourceQuotaManager();
+    const usage = await manager.getUsage('unknown-role');
+    expect(usage).toEqual({ cpu: 0, memoryMB: 0, connections: 0, queryRate: 0 });
+  });
+
+  it('clear resets all quotas and usage', async () => {
+    const manager = new InMemoryResourceQuotaManager();
+    await manager.setQuota('user', { cpuLimit: 80, memoryLimitMB: 4096, connectionLimit: 50, queryRateLimit: 1000 });
+    manager.setRoleUsage('user', { cpu: 10, memoryMB: 100, connections: 5, queryRate: 10 });
+
+    manager.clear();
+    expect(await manager.getQuota('user')).toBeNull();
+    expect(await manager.getUsage('user')).toEqual({ cpu: 0, memoryMB: 0, connections: 0, queryRate: 0 });
   });
 
   it.each([

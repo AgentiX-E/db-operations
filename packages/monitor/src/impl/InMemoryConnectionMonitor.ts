@@ -61,7 +61,6 @@ export class InMemoryConnectionMonitor implements IConnectionMonitor {
     const pool = this._poolStats.get(poolId);
     if (pool && pool.active > 0) {
       pool.active--;
-      pool.idle = Math.max(0, pool.idle - 0); // idle doesn't change on close
     }
   }
 

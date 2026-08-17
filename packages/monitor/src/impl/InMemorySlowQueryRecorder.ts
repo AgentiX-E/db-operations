@@ -15,7 +15,6 @@ interface InternalEntry {
   startTime: string;
   actor?: string;
   shardId?: string;
-  completed: boolean;
 }
 
 /**
@@ -43,7 +42,6 @@ export class InMemorySlowQueryRecorder {
         startTime: query.timestamp.toISOString(),
         actor: query.user,
         shardId: query.database,
-        completed: true,
       };
 
       if (this._entries.length >= this._maxEntries) {

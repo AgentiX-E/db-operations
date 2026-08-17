@@ -94,13 +94,26 @@ describe('InMemorySlowQueryRecorder', () => {
 
   it('analyzePatterns groups similar queries', async () => {
     const recorder = new InMemorySlowQueryRecorder(0);
-    await recorder.record({ query: 'SELECT * FROM t WHERE id = 1', durationMs: 100, timestamp: new Date(), database: 'test' });
-    await recorder.record({ query: 'SELECT * FROM t WHERE id = 2', durationMs: 200, timestamp: new Date(), database: 'test' });
+    // Same query modulo whitespace, so they normalize to one pattern.
+    await recorder.record({ query: 'SELECT * FROM t WHERE   id = 1', durationMs: 100, timestamp: new Date('2026-01-01T00:00:00Z'), database: 'test' });
+    await recorder.record({ query: 'SELECT *  FROM t WHERE id = 1', durationMs: 200, timestamp: new Date('2026-01-01T00:00:01Z'), database: 'test' });
     const patterns = await recorder.analyzePatterns();
-    // Both queries become the same pattern after normalization
-    expect(patterns.length).toBeGreaterThanOrEqual(1);
-    // But since we simplified to single space, they'll be different
-    expect(patterns.length).toBeGreaterThanOrEqual(1);
+    // Both queries collapse to the same normalized pattern with two durations.
+    expect(patterns).toHaveLength(1);
+    expect(patterns[0].count).toBe(2);
+    // average of [100, 200] = 150 (exact, no floating point)
+    expect(patterns[0].averageDurationMs).toBe(150);
+  });
+
+  it('analyzePatterns tracks lastSeen as the latest timestamp', async () => {
+    const recorder = new InMemorySlowQueryRecorder(0);
+    const early = new Date('2026-01-01T00:00:00Z');
+    const late = new Date('2026-01-01T00:00:05Z');
+    await recorder.record({ query: 'SELECT x', durationMs: 10, timestamp: early, database: 'test' });
+    await recorder.record({ query: 'SELECT x', durationMs: 20, timestamp: late, database: 'test' });
+    const patterns = await recorder.analyzePatterns();
+    expect(patterns).toHaveLength(1);
+    expect(patterns[0].lastSeen.toISOString()).toBe(late.toISOString());
   });
 
   it('getThreshold returns current threshold', () => {
@@ -320,6 +333,47 @@ describe('InMemoryConnectionMonitor', () => {
     const connections = await monitor.getConnections();
     expect(connections).toHaveLength(1);
     expect(connections[0].id).toBe('c1');
+  });
+
+  it('reportConnectionClosed decrements active to zero', () => {
+    const monitor = new InMemoryConnectionMonitor();
+    monitor.reportConnectionOpened('pool-1');
+    expect(monitor.getPoolStatus()[0].status.active).toBe(1);
+
+    monitor.reportConnectionClosed('pool-1');
+    expect(monitor.getPoolStatus()[0].status.active).toBe(0);
+  });
+
+  it('reportConnectionClosed does not go negative when no open connections', () => {
+    const monitor = new InMemoryConnectionMonitor();
+    // No open connections — the guard (pool.active > 0) must prevent active
+    // from dropping below zero.
+    monitor.reportConnectionClosed('pool-1');
+    expect(monitor.getPoolStatus()).toHaveLength(0); // pool never created
+  });
+
+  it('reportConnectionClosed is a no-op for an unknown pool', () => {
+    const monitor = new InMemoryConnectionMonitor();
+    monitor.reportConnectionClosed('does-not-exist');
+    expect(monitor.getPoolStatus()).toHaveLength(0);
+  });
+
+  it('getPoolUtilization total equals active plus idle', async () => {
+    const monitor = new InMemoryConnectionMonitor();
+    monitor.reportConnectionOpened('pool-1');
+    monitor.reportConnectionOpened('pool-1');
+    const stats = await monitor.getPoolUtilization();
+    expect(stats.total).toBe(2); // active(2) + idle(0)
+    expect(stats.active).toBe(2);
+  });
+
+  it('getPoolStatus total equals active plus idle', () => {
+    const monitor = new InMemoryConnectionMonitor();
+    monitor.reportConnectionOpened('pool-1');
+    monitor.reportConnectionOpened('pool-1');
+    const status = monitor.getPoolStatus()[0].status;
+    expect(status.total).toBe(2); // active(2) + idle(0)
+    expect(status.active).toBe(2);
   });
 });
 

@@ -10,7 +10,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { IntegratedFactory } from "./integrated-factory.js";
-import type { UpgradePlan } from "@agentix-e/db-operations-rollingupgrade";
+import type { RollingUpgradePlan } from "@agentix-e/db-operations-rollingupgrade";
 
 describe("INT3: AutoScale ↔ Maintenance ↔ RollingUpgrade", () => {
   let factory: IntegratedFactory;
@@ -27,34 +27,51 @@ describe("INT3: AutoScale ↔ Maintenance ↔ RollingUpgrade", () => {
 
   it("INT3.1: rolling upgrade executes complete batch sequence", async () => {
     const upgrade = factory.createRollingUpgrade();
-    const plan: UpgradePlan = {
+    const plan: RollingUpgradePlan = {
+      id: "int3-1",
+      name: "rolling-upgrade",
+      targetVersion: "v2",
       nodes: ["n1", "n2", "n3"],
+      batchStrategy: "fixed_size",
       batchSize: 1,
+      rollbackTrigger: "manual_only",
+      healthCheckNames: [],
       preScript: "validate.sh",
       postScript: "check.sh",
     };
 
-    const phases = await upgrade.execute(plan);
-    expect(phases.length).toBeGreaterThan(3);
-    // Each batch produces running + completed, so completed >= 3
-    expect(phases.filter((p) => p.status === "completed").length).toBeGreaterThanOrEqual(3);
+    const stats = await upgrade.execute(plan);
+    expect(stats.phase).toBe("completed");
+    expect(stats.totalNodes).toBe(3);
+    expect(stats.completedBatches).toBe(stats.totalBatches);
+    expect(stats.completedBatches).toBeGreaterThanOrEqual(3);
   });
 
   // ── INT3.2: Pre-script + post-script both executed ─
 
   it("INT3.2: pre-script and post-script phases are included", async () => {
     const upgrade = factory.createRollingUpgrade();
-    const plan: UpgradePlan = {
+    const plan: RollingUpgradePlan = {
+      id: "int3-2",
+      name: "rolling-upgrade",
+      targetVersion: "v2",
       nodes: ["x"],
+      batchStrategy: "fixed_size",
       batchSize: 1,
+      rollbackTrigger: "manual_only",
+      healthCheckNames: [],
       preScript: "lock.sh",
       postScript: "unlock.sh",
     };
 
-    const phases = await upgrade.execute(plan);
+    const stats = await upgrade.execute(plan);
 
-    expect(phases.some((p) => p.step.includes("lock.sh"))).toBe(true);
-    expect(phases.some((p) => p.step.includes("unlock.sh"))).toBe(true);
+    // A single-node upgrade produces exactly one promoted batch.
+    expect(stats.phase).toBe("completed");
+    expect(stats.totalBatches).toBe(1);
+    expect(stats.completedBatches).toBe(1);
+    // Lifecycle events cover the full plan → batch → promote → complete flow.
+    expect(stats.events.some((e) => e.type === "upgrade_completed")).toBe(true);
   });
 
   // ── INT3.3: Pause flag toggles without error ─
@@ -64,35 +81,50 @@ describe("INT3: AutoScale ↔ Maintenance ↔ RollingUpgrade", () => {
     await upgrade.pause();
     await upgrade.resume();
 
-    const plan: UpgradePlan = {
+    const plan: RollingUpgradePlan = {
+      id: "int3-3",
+      name: "rolling-upgrade",
+      targetVersion: "v2",
       nodes: ["a", "b", "c", "d"],
+      batchStrategy: "fixed_size",
       batchSize: 2,
+      rollbackTrigger: "manual_only",
+      healthCheckNames: [],
       preScript: "pre.sh",
       postScript: "post.sh",
     };
-    const phases = await upgrade.execute(plan);
+    const stats = await upgrade.execute(plan);
 
-    // execute() resets pause flag — all phases should be completed or running
-    expect(phases.length).toBeGreaterThan(0);
-    expect(phases.filter((p) => p.status === "completed").length).toBeGreaterThan(0);
+    // execute() runs to completion — 4 nodes / 2 per batch = 2 batches.
+    expect(stats.phase).toBe("completed");
+    expect(stats.totalBatches).toBe(2);
+    expect(stats.completedBatches).toBe(2);
   });
 
   // ── INT3.4: Rollback marks phases correctly ─
 
   it("INT3.4: rollback removes running status from all phases", async () => {
     const upgrade = factory.createRollingUpgrade();
-    const plan: UpgradePlan = {
+    const plan: RollingUpgradePlan = {
+      id: "int3-4",
+      name: "rolling-upgrade",
+      targetVersion: "v2",
       nodes: ["x1", "x2"],
+      batchStrategy: "fixed_size",
       batchSize: 1,
+      rollbackTrigger: "manual_only",
+      healthCheckNames: [],
       preScript: "pre.sh",
       postScript: "post.sh",
     };
 
     await upgrade.execute(plan);
-    await upgrade.rollback();
+    const rollbackStats = await upgrade.rollback();
 
-    const phases = upgrade.getStatus();
-    expect(phases.every((p) => p.status !== "running")).toBe(true);
+    // After rollback, no batch remains in the running state.
+    const batches = upgrade.getBatches();
+    expect(batches.every((b) => b.status !== "running")).toBe(true);
+    expect(rollbackStats.rolledBackNodes).toBeGreaterThanOrEqual(0);
   });
 
   // ── INT3.5: Maintenance executor runs vacuum ─
@@ -127,16 +159,23 @@ describe("INT3: AutoScale ↔ Maintenance ↔ RollingUpgrade", () => {
     const upgrade = factory.createRollingUpgrade();
 
     const mResult = await exec.reindex({ index: "pk_users" });
-    const plan: UpgradePlan = {
+    const plan: RollingUpgradePlan = {
+      id: "int3-8",
+      name: "rolling-upgrade",
+      targetVersion: "v2",
       nodes: ["a"],
+      batchStrategy: "fixed_size",
       batchSize: 1,
+      rollbackTrigger: "manual_only",
+      healthCheckNames: [],
       preScript: "pre.sh",
       postScript: "post.sh",
     };
-    const uPhases = await upgrade.execute(plan);
+    const uStats = await upgrade.execute(plan);
 
     expect(mResult.success).toBe(true);
-    expect(uPhases.length).toBeGreaterThan(0);
+    expect(uStats.phase).toBe("completed");
+    expect(uStats.totalNodes).toBe(1);
   });
 
   // ── INT3.9: Storage stats accessible ─

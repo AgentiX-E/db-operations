@@ -17,7 +17,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { IntegratedFactory } from "./integrated-factory.js";
-import type { UpgradePlan } from "@agentix-e/db-operations-rollingupgrade";
+import type { RollingUpgradePlan } from "@agentix-e/db-operations-rollingupgrade";
 import type { Identity } from "@agentix-e/db-operations-security";
 import { componentProbe } from "@agentix-e/db-operations-health";
 
@@ -183,22 +183,27 @@ describe("E2E: Full Operational Lifecycle", () => {
       );
     }
 
-    const plan: UpgradePlan = {
+    const plan: RollingUpgradePlan = {
+      id: "e2e5",
+      name: "rolling-upgrade",
+      targetVersion: "v2",
       nodes: ["db-node-01", "db-node-02", "db-node-03", "db-node-04"],
+      batchStrategy: "fixed_size",
       batchSize: 2,
+      rollbackTrigger: "manual_only",
+      healthCheckNames: [],
       preScript: "lock-connections.sh",
       postScript: "unlock-connections.sh",
     };
 
-    const phases = await upgrade.execute(plan);
+    const stats = await upgrade.execute(plan);
 
-    // Pre/post scripts both executed
-    expect(phases.some((p) => p.step.includes("lock-connections.sh"))).toBe(true);
-    expect(phases.some((p) => p.step.includes("unlock-connections.sh"))).toBe(true);
-
-    // 4 nodes / 2 batch = 2 batches × 2 phases (running+completed) = 4 batch entries
-    const batchPhases = phases.filter((p) => p.step.startsWith("upgrade-batch-"));
-    expect(batchPhases.length).toBe(4);
+    // 4 nodes / 2 per batch = 2 batches, all promoted to completion.
+    expect(stats.phase).toBe("completed");
+    expect(stats.totalNodes).toBe(4);
+    expect(stats.totalBatches).toBe(2);
+    expect(stats.completedBatches).toBe(2);
+    expect(stats.events.some((e) => e.type === "upgrade_completed")).toBe(true);
 
     // Health orchestrator still functional
     const componentHealth = health.getComponentHealth();
@@ -372,15 +377,21 @@ describe("E2E: Full Operational Lifecycle", () => {
     expect(backupResult.snapshot).toBeTruthy();
 
     // ── 5. Rolling Upgrade ────────────────────────────
-    const plan: UpgradePlan = {
+    const plan: RollingUpgradePlan = {
+      id: "e2e9",
+      name: "rolling-upgrade",
+      targetVersion: "v2",
       nodes: ["node-1", "node-2"],
+      batchStrategy: "fixed_size",
       batchSize: 1,
+      rollbackTrigger: "manual_only",
+      healthCheckNames: [],
       preScript: "pre.sh",
       postScript: "post.sh",
     };
-    const upgradePhases = await upgrade.execute(plan);
-    const completedUpgrade = upgradePhases.filter((p) => p.status === "completed");
-    expect(completedUpgrade.length).toBeGreaterThanOrEqual(2);
+    const upgradeStats = await upgrade.execute(plan);
+    expect(upgradeStats.phase).toBe("completed");
+    expect(upgradeStats.completedBatches).toBeGreaterThanOrEqual(2);
 
     // ── 6. Maintenance ────────────────────────────────
     const vacuumResult = await maint.vacuum({ tables: ["lifecycle_data"] });

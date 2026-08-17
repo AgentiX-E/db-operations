@@ -611,4 +611,77 @@ describe('InMemoryResourceQuotaManager', () => {
     expect(usage.connections).toBe(20);
     expect(usage.queryRate).toBe(500);
   });
+
+  it.each([
+    ['memory', { memoryMB: 8192, connections: 1, queryRate: 1 }, 'Memory limit exceeded'],
+    ['connections', { memoryMB: 1, connections: 100, queryRate: 1 }, 'Connection limit exceeded'],
+    ['queryRate', { memoryMB: 1, connections: 1, queryRate: 5000 }, 'Query rate limit exceeded'],
+  ])('checkQuota blocks over role %s limit', async (_label, usage, reasonPrefix) => {
+    const manager = new InMemoryResourceQuotaManager();
+    await manager.setQuota('user', { cpuLimit: 50, memoryLimitMB: 4096, connectionLimit: 50, queryRateLimit: 1000 });
+    manager.setRoleUsage('user', usage);
+
+    const result = await manager.checkQuota('user');
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toContain(reasonPrefix);
+  });
+
+  it('checkQuota allows when all role limits satisfied', async () => {
+    const manager = new InMemoryResourceQuotaManager();
+    await manager.setQuota('user', { cpuLimit: 50, memoryLimitMB: 4096, connectionLimit: 50, queryRateLimit: 1000 });
+    manager.setRoleUsage('user', { cpu: 10, memoryMB: 100, connections: 5, queryRate: 10 });
+
+    const result = await manager.checkQuota('user');
+    expect(result.allowed).toBe(true);
+    expect(result.reason).toBeUndefined();
+  });
+
+  it('getUtilization memoryUtilization uses non-integer fraction', async () => {
+    const manager = new InMemoryResourceQuotaManager();
+    manager.updateConfig({ maxMemoryMB: 3 });
+    manager.setUsage({ memoryMB: 2 });
+    const util = manager.getUtilization();
+    // 2 / 3 = 0.6666... (exact fraction, not integer-rounded)
+    expect(util.memoryUtilization).toBeCloseTo(2 / 3, 10);
+  });
+
+  it('getUtilization memoryUtilization is 0 when maxMemoryMB is 0', () => {
+    const manager = new InMemoryResourceQuotaManager();
+    manager.updateConfig({ maxMemoryMB: 0 });
+    manager.setUsage({ memoryMB: 100 });
+    expect(manager.getUtilization().memoryUtilization).toBe(0);
+  });
+
+  it('setUsage ignores undefined fields (no overwrite)', () => {
+    const manager = new InMemoryResourceQuotaManager();
+    manager.setUsage({ memoryMB: 100, queriesPerSec: 50, connections: 10 });
+    // Passing undefined for a field must not reset it.
+    manager.setUsage({ memoryMB: undefined });
+    expect(manager.getUtilization().memoryBytes).toBe(100 * 1024 * 1024);
+    expect(manager.getUtilization().queriesPerSec).toBe(50);
+  });
+
+  it('setUsage ignores undefined queriesPerSec', () => {
+    const manager = new InMemoryResourceQuotaManager();
+    manager.setUsage({ queriesPerSec: 50 });
+    manager.setUsage({ queriesPerSec: undefined });
+    expect(manager.getUtilization().queriesPerSec).toBe(50);
+  });
+
+  it('getUtilization connectionPool.utilization is active/max fraction', () => {
+    const manager = new InMemoryResourceQuotaManager();
+    manager.updateConfig({ maxConnections: 4 });
+    manager.setUsage({ connections: 2 });
+    const util = manager.getUtilization();
+    // 2 / 4 = 0.5 exact
+    expect(util.connectionPool.utilization).toBe(0.5);
+    expect(util.connectionPool.maxSize).toBe(4);
+  });
+
+  it('getUtilization connectionPool.utilization is 0 when maxConnections is 0', () => {
+    const manager = new InMemoryResourceQuotaManager();
+    manager.updateConfig({ maxConnections: 0 });
+    manager.setUsage({ connections: 5 });
+    expect(manager.getUtilization().connectionPool.utilization).toBe(0);
+  });
 });

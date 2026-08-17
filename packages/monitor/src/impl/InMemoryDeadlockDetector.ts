@@ -133,87 +133,78 @@ export class InMemoryDeadlockDetector {
     const graph = this._buildGraph();
     const events: DeadlockEvent[] = [];
 
-    // Tarjan-like approach: find all cycles, resolve each
-    // Use DFS with path tracking. Since we need to find all cycles
-    // and resolve them, we repeatedly scan until no more cycles found.
+    // Iterative DFS with an explicit color map. A single pass discovers every
+    // cycle reachable from each unvisited node without the O(N^2) rescan loop.
+    const WHITE = 0;
+    const GRAY = 1;
+    const BLACK = 2;
+    const color = new Map<string, number>();
+    const path: string[] = [];
 
-    const findAllCycles = (): boolean => {
-      const visited = new Set<string>();
-      const recStack = new Set<string>();
-      const path: string[] = [];
+    const colorOf = (node: string): number => color.get(node) ?? WHITE;
 
-      const findCycleFrom = (node: string): boolean => {
-        visited.add(node);
-        recStack.add(node);
-        path.push(node);
+    const visit = (node: string): void => {
+      color.set(node, GRAY);
+      path.push(node);
 
-        const neighbors = graph.get(node);
-        if (neighbors) {
-          for (const neighbor of neighbors) {
-            if (!visited.has(neighbor)) {
-              if (findCycleFrom(neighbor)) return true;
-            } else if (recStack.has(neighbor)) {
-              // Trace the cycle from neighbor to node
-              const cycleStart = path.indexOf(neighbor);
-              const cycle = path.slice(cycleStart);
-
-              // Collect resources involved
-              const resourceList: string[] = [];
-              for (const tx of cycle) {
-                const held = this._acquired.get(tx);
-                const wait = this._waitFor.get(tx);
-                if (held) for (const r of held) { resourceList.push(r); }
-                if (wait) for (const r of wait) { resourceList.push(r); }
-              }
-
-              // Victim: pick the first transaction in the detected cycle.
-              // (There is no timestamp here, so the earliest DFS-path node is
-              // used as a deterministic victim to break the deadlock.)
-              const victim = cycle[0];
-
-              const event: DeadlockEvent = {
-                timestamp: new Date().toISOString(),
-                transactions: [...cycle],
-                resources: [...new Set(resourceList)],
-                resolvedBy: victim!,
-              };
-              events.push(event);
-              this._deadlocks.push(event);
-
-              // Remove victim from wait-for graph (resolve deadlock)
-              this._waitFor.delete(victim!);
-              graph.delete(victim!);
-
-              this._notifyCallbacks({
-                cycle: [...cycle],
-                victimTransaction: victim!,
-                detectedAt: new Date(event.timestamp),
-              });
-
-              return true;
-            }
-          }
-        }
-
-        recStack.delete(node);
-        path.pop();
-        return false;
-      };
-
-      for (const node of graph.keys()) {
-        if (!visited.has(node)) {
-          if (findCycleFrom(node)) return true;
+      for (const neighbor of graph.get(node) ?? []) {
+        if (colorOf(neighbor) === WHITE) {
+          visit(neighbor);
+        } else if (colorOf(neighbor) === GRAY) {
+          // A GRAY neighbor closes a cycle: [neighbor ... node] within path.
+          const cycleStart = path.indexOf(neighbor);
+          const cycle = path.slice(cycleStart);
+          const event = this._makeCycleEvent(cycle);
+          events.push(event);
+          this._deadlocks.push(event);
+          this._waitFor.delete(cycle[0]);
         }
       }
-      return false;
+
+      path.pop();
+      color.set(node, BLACK);
     };
 
-    // Keep finding and resolving cycles until none remain
-    while (findAllCycles()) {
-      // Continue; graph was modified (victim removed)
+    for (const node of graph.keys()) {
+      if (colorOf(node) === WHITE) {
+        visit(node);
+      }
     }
 
     return events;
+  }
+
+  /**
+   * Build a DeadlockEvent for a detected cycle and notify registered callbacks.
+   */
+  private _makeCycleEvent(cycle: string[]): DeadlockEvent {
+    const resourceList: string[] = [];
+    for (const tx of cycle) {
+      const held = this._acquired.get(tx);
+      const wait = this._waitFor.get(tx);
+      if (held) for (const r of held) { resourceList.push(r); }
+      if (wait) for (const r of wait) { resourceList.push(r); }
+    }
+
+    // Victim: pick the first transaction in the detected cycle.
+    // (There is no timestamp here, so the earliest DFS-path node is
+    // used as a deterministic victim to break the deadlock.)
+    const victim = cycle[0];
+
+    const event: DeadlockEvent = {
+      timestamp: new Date().toISOString(),
+      transactions: [...cycle],
+      resources: [...new Set(resourceList)],
+      resolvedBy: victim,
+    };
+
+    this._notifyCallbacks({
+      cycle: [...cycle],
+      victimTransaction: victim,
+      detectedAt: new Date(event.timestamp),
+    });
+
+    return event;
   }
 
   /**

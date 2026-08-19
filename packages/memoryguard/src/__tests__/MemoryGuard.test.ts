@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { InMemoryMemoryGuard } from '../impl/InMemoryMemoryGuard.js';
 
 describe('InMemoryMemoryGuard', () => {
@@ -78,5 +78,23 @@ describe('InMemoryMemoryGuard', () => {
     const guard = new InMemoryMemoryGuard();
     const result = await guard.protect(async () => 'async-result');
     expect(result).toBe('async-result');
+  });
+});
+
+describe('InMemoryMemoryGuard zero-heapTotal division guard', () => {
+  it('treats a zero heapTotal as ratio 0 (healthy) instead of dividing by zero', () => {
+    const guard = new InMemoryMemoryGuard();
+    // Mock memoryUsage so heapTotal === 0. The `> 0` guard must fall through to
+    // ratio 0 (healthy) rather than compute heapUsed/0 === Infinity (unhealthy).
+    // The mutant `>` → `<=` would take the division path and report unhealthy.
+    vi.spyOn(process, 'memoryUsage').mockReturnValue({
+      heapUsed: 1024,
+      heapTotal: 0,
+      external: 0,
+      rss: 0,
+      arrayBuffers: 0,
+    } as NodeJS.MemoryUsage);
+    expect(guard.isHealthy()).toBe(true);
+    vi.restoreAllMocks();
   });
 });

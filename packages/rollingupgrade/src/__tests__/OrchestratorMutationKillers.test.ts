@@ -894,3 +894,137 @@ describe('rollingupgrade rollback of in-flight draining nodes', () => {
     expect(e.getBatches()[0]!.nodes[0]!.status).toBe('rolled_back');
   });
 });
+
+describe('rollingupgrade rollback excludes failed nodes', () => {
+  it('does not count failed nodes as rolled back', async () => {
+    const e = engine();
+    // node 'a' fails, 'b'/'c' healthy → tolerate (on_batch_threshold below 0.5),
+    // leaving 'a' failed and 'b'/'c' completed.
+    e.registerHealthCheck('mixed', async (nodeId) => {
+      return nodeId === 'a'
+        ? { healthy: false, nodes: [{ healthy: false, details: {}, checkedAt: Date.now() }], evaluatedAt: Date.now() }
+        : { healthy: true, nodes: [], evaluatedAt: Date.now() };
+    });
+    await e.execute(makePlan({
+      nodes: ['a', 'b', 'c'],
+      batchSize: 3,
+      healthCheckNames: ['mixed'],
+      rollbackTrigger: 'on_batch_threshold',
+      batchFailureThreshold: 0.5,
+    }));
+
+    // Manual rollback must roll back only the two completed nodes; the failed
+    // node stays failed and is NOT counted (exercises _rollbackNode's `return
+    // false` for non-in-flight nodes — the event's rolledBackNodes comes from
+    // the local counter, which the mutant `return true` would inflate to 3).
+    await e.rollback();
+    const statuses = e.getBatches()[0]!.nodes.map((n) => n.status).sort();
+    expect(statuses).toEqual(['failed', 'rolled_back', 'rolled_back']);
+    const ev = e.getEvents().find((x) => x.type === 'rollback_completed');
+    expect(ev).toBeDefined();
+    expect((ev!.details as any).rolledBackNodes).toBe(2);
+  });
+});
+
+describe('rollingupgrade multi-batch threshold control flow', () => {
+  it('stops rolling when a later batch breaches the threshold (return false)', async () => {
+    const e = engine();
+    // 3 batches of 2: [a,b] healthy, [c,d] both fail (breach), [e,f] healthy.
+    e.registerHealthCheck('sel', async (nodeId) => ({
+      healthy: nodeId !== 'c' && nodeId !== 'd',
+      nodes: [],
+      evaluatedAt: Date.now(),
+    }));
+    const s = await e.execute(makePlan({
+      nodes: ['a', 'b', 'c', 'd', 'e', 'f'],
+      batchSize: 2,
+      healthCheckNames: ['sel'],
+      rollbackTrigger: 'on_batch_threshold',
+      batchFailureThreshold: 0.5,
+    }));
+    // Batch 2 breaches → on_batch_threshold triggers _rollbackAll: batch 1's
+    // completed a,b are rolled back, c,d fail, and batch 3 ([e,f]) never runs.
+    expect(s.phase).toBe('failed');
+    expect(s.upgradedNodes).toBe(0); // a,b were rolled back
+    expect(s.rolledBackNodes).toBe(2); // a, b
+    expect(s.failedNodes).toBe(2); // c, d
+    const third = e.getBatches().find((b) => b.index === 3)!;
+    expect(third.nodes.every((n) => n.status === 'pending')).toBe(true);
+  });
+
+  it('continues rolling past a tolerated partial failure (return true)', async () => {
+    const e = engine();
+    // 3 batches of 2: [a,b] healthy, [c,d] c fails (ratio 0.5 < 0.6 tolerated),
+    // [e,f] healthy. Tolerance must NOT stop the subsequent batch.
+    e.registerHealthCheck('sel', async (nodeId) => ({
+      healthy: nodeId !== 'c',
+      nodes: [],
+      evaluatedAt: Date.now(),
+    }));
+    const s = await e.execute(makePlan({
+      nodes: ['a', 'b', 'c', 'd', 'e', 'f'],
+      batchSize: 2,
+      healthCheckNames: ['sel'],
+      rollbackTrigger: 'on_batch_threshold',
+      batchFailureThreshold: 0.6,
+    }));
+    expect(s.phase).toBe('completed');
+    expect(s.upgradedNodes).toBe(5); // all but c
+    expect(s.failedNodes).toBe(1);
+    const third = e.getBatches().find((b) => b.index === 3)!;
+    expect(third.nodes.every((n) => n.status === 'completed')).toBe(true);
+  });
+});
+
+describe('rollingupgrade _handleFailure marks non-completed nodes failed', () => {
+  it('marks healthy-but-unpromoted nodes as failed when a batch fails (manual_only)', async () => {
+    const e = engine();
+    // node 'a' fails, node 'b' is healthy (stays health_check) — manual_only
+    // means no rollback, so `_handleFailure` must mark BOTH as failed: 'a' was
+    // already failed by the health check, 'b' is non-completed and must become
+    // failed (the mutant `!==` → `===` would leave 'b' in health_check).
+    e.registerHealthCheck('mixed', async (nodeId) => ({
+      healthy: nodeId !== 'a',
+      nodes: [],
+      evaluatedAt: Date.now(),
+    }));
+    const s = await e.execute(makePlan({
+      nodes: ['a', 'b'],
+      batchSize: 2,
+      healthCheckNames: ['mixed'],
+      rollbackTrigger: 'manual_only',
+    }));
+    expect(s.phase).toBe('failed');
+    expect(s.failedNodes).toBe(2); // both a and b
+    const statuses = e.getBatches()[0]!.nodes.map((n) => n.status).sort();
+    expect(statuses).toEqual(['failed', 'failed']);
+  });
+});
+
+describe('rollingupgrade canary failure with on_batch_threshold policy', () => {
+  it('does NOT roll back on canary failure under on_batch_threshold (trigger scoping)', async () => {
+    const e = engine();
+    // Canary fails. With rollbackTrigger === 'on_batch_threshold', the canary
+    // failure has trigger 'canary' (not 'batch_threshold'), so isBatchThreshold
+    // must stay false and no rollback may occur. The mutant `&&` → `||` would
+    // wrongly roll back here.
+    e.registerHealthCheck('bad', unhealthy);
+    const s = await e.execute(makePlan({
+      nodes: ['a', 'b', 'c'],
+      batchSize: 3,
+      healthCheckNames: ['bad'],
+      rollbackTrigger: 'on_batch_threshold',
+      batchFailureThreshold: 0.5,
+      canary: { fraction: 0.34, bakeTimeMs: 0, requiredChecks: ['bad'] },
+    }));
+    expect(s.phase).toBe('failed');
+    expect(s.rolledBackNodes).toBe(0);
+    expect(s.failedNodes).toBeGreaterThanOrEqual(1);
+    // Crucially, no rollback must have been triggered (the `&&`→`||` mutant
+    // would emit rollback_triggered/rollback_completed events even though the
+    // failed canary node itself cannot be rolled back).
+    const rbEvents = e.getEvents().filter((x) =>
+      x.type === 'rollback_triggered' || x.type === 'rollback_completed');
+    expect(rbEvents).toHaveLength(0);
+  });
+});

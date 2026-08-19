@@ -13,7 +13,14 @@ import type {
   BatchHealth,
 } from '../interfaces/types.js';
 
-const instantSleep = () => Promise.resolve();
+// Yield to the macrotask queue (setTimeout 0) rather than Promise.resolve().
+// A `while (paused) await sleep()` loop awaits this sleep 100 times per second;
+// with `Promise.resolve()` that resolves as a microtask, the loop never yields
+// to the event loop, so a mutant that leaves `paused === true` spins forever and
+// even vitest's testTimeout (a macrotask) cannot fire. Yielding via setTimeout(0)
+// lets the timeout interrupt the mutant and turn an infinite hang into a fast,
+// observable test failure.
+const instantSleep = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
 function makePlan(overrides: Partial<RollingUpgradePlan> = {}): RollingUpgradePlan {
   return {
@@ -546,6 +553,28 @@ describe('rollingupgrade rollback trigger observable rollback', () => {
     expect(types).toContain('rollback_triggered');
   });
 
+  it('on_first_failure rollback emits exact rolledBackBatches count', async () => {
+    const e = engine();
+    // Batch1 (a) healthy → completed; batch2 (b) healthy → completed; batch3 (c)
+    // unhealthy → on_first_failure rolls back the two completed batches, leaving
+    // the failing batch failed. So rolledBackBatches === 2 (and !==2 would be 1,
+    // distinguishing the `===`→`!==` mutant on the filter).
+    e.registerHealthCheck('flaky', async (nodeId) => {
+      return nodeId === 'c'
+        ? { healthy: false, nodes: [{ healthy: false, details: {}, checkedAt: Date.now() }], evaluatedAt: Date.now() }
+        : { healthy: true, nodes: [], evaluatedAt: Date.now() };
+    });
+    await e.execute(makePlan({
+      nodes: ['a', 'b', 'c'],
+      batchSize: 1,
+      healthCheckNames: ['flaky'],
+      rollbackTrigger: 'on_first_failure',
+    }));
+    const ev = e.getEvents().find((x) => x.type === 'rollback_completed');
+    expect(ev).toBeDefined();
+    expect((ev!.details as any).rolledBackBatches).toBe(2);
+  });
+
   it('on_degradation emits rollback_triggered event', async () => {
     const e = engine();
     e.registerHealthCheck('bad', unhealthy);
@@ -583,3 +612,251 @@ describe('rollingupgrade fractional batchSize', () => {
   });
 });
 
+describe('rollingupgrade maxDurationMs abort', () => {
+  it('aborts when elapsed exceeds maxDurationMs', async () => {
+    const e = engine();
+    e.registerHealthCheck('ok', healthy);
+    let tick = 0;
+    vi.spyOn(Date, 'now').mockImplementation(() => {
+      // First call (startTime capture) returns 0; later calls return 1000 so
+      // elapsed 1000 > maxDurationMs(1) → abort.
+      return tick++ === 0 ? 0 : 1000;
+    });
+    const s = await e.execute(makePlan({
+      nodes: ['a', 'b'],
+      batchSize: 1,
+      healthCheckNames: ['ok'],
+      maxDurationMs: 1,
+    }));
+    expect(s.phase).toBe('aborted');
+    expect(s.events.some((ev) => ev.type === 'upgrade_aborted')).toBe(true);
+  });
+
+  it('does NOT abort when a large startTime cancels elapsed under AND operator (kills `-`→`+`)', async () => {
+    const e = engine();
+    e.registerHealthCheck('ok', healthy);
+    let tick = 0;
+    vi.spyOn(Date, 'now').mockImplementation(() => {
+      // startTime = 1_000_000_000, later now = 1_000_000_000 (equal): elapsed
+      // = now - start = 0 (≤ maxDurationMs, no abort). A `-`→`+` mutant computes
+      // now + start = 2_000_000_000 which is > maxDurationMs → spurious abort.
+      return tick++ === 0 ? 1_000_000_000 : 1_000_000_000;
+    });
+    const s = await e.execute(makePlan({
+      nodes: ['a', 'b'],
+      batchSize: 1,
+      healthCheckNames: ['ok'],
+      maxDurationMs: 1,
+    }));
+    expect(s.phase).toBe('completed');
+    expect(s.events.some((ev) => ev.type === 'upgrade_aborted')).toBe(false);
+  });
+
+  it('does NOT abort when duration stays within maxDurationMs', async () => {
+    const e = engine();
+    e.registerHealthCheck('ok', healthy);
+    // Static clock: Date.now() - startTime === 0, never exceeds the limit.
+    vi.spyOn(Date, 'now').mockImplementation(() => 0);
+    const s = await e.execute(makePlan({
+      nodes: ['a', 'b'],
+      batchSize: 1,
+      healthCheckNames: ['ok'],
+      maxDurationMs: 1,
+    }));
+    expect(s.phase).toBe('completed');
+  });
+});
+
+describe('rollingupgrade percentage + one_by_one + all_at_once sizing', () => {
+  it('one_by_one produces one non-canary batch per node with sequential indices', async () => {
+    const e = engine();
+    await e.execute(makePlan({ nodes: ['a', 'b', 'c'], batchStrategy: 'one_by_one' }));
+    const batches = e.getBatches();
+    expect(batches.length).toBe(3);
+    // Pin isCanary=false (L267 `false`→`true` mutant) and 1-based index (L287 `+`→`-`).
+    expect(batches.map((b) => b.isCanary)).toEqual([false, false, false]);
+    expect(batches.map((b) => b.index)).toEqual([1, 2, 3]);
+    expect(batches.map((b) => b.nodes.length)).toEqual([1, 1, 1]);
+  });
+
+  it('all_at_once produces one non-canary batch with every node', async () => {
+    const e = engine();
+    await e.execute(makePlan({ nodes: ['a', 'b', 'c'], batchStrategy: 'all_at_once' }));
+    const batches = e.getBatches();
+    expect(batches.length).toBe(1);
+    expect(batches[0]!.nodes.length).toBe(3);
+    // Pin isCanary=false (L275 `false`→`true`) and index (L287 `+`→`-`).
+    expect(batches[0]!.isCanary).toBe(false);
+    expect(batches[0]!.index).toBe(1);
+  });
+
+  it('percentage uses batchSize as a percentage (batchSize 50 → ceil halves)', async () => {
+    const e = engine();
+    await e.execute(makePlan({ nodes: ['a', 'b', 'c', 'd', 'e'], batchStrategy: 'percentage', batchSize: 50 }));
+    const batches = e.getBatches();
+    // 5 * 0.5 = 2.5 → ceil 3; 2 * 0.5 = 1; 1 * 0.5 = 0.5 → ceil 1.
+    expect(batches.map((b) => b.nodes.length)).toEqual([3, 1, 1]);
+    // Pin isCanary=false (L287 `false`→`true`) and sequential indices (L287 `+`→`-`).
+    expect(batches.map((b) => b.isCanary)).toEqual([false, false, false]);
+    expect(batches.map((b) => b.index)).toEqual([1, 2, 3]);
+  });
+
+  it('percentage uses zero batchSize as the 20% fallback denominator', async () => {
+    const e = engine();
+    await e.execute(makePlan({ nodes: ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'], batchStrategy: 'percentage', batchSize: 0 }));
+    const batches = e.getBatches();
+    // 10 * 0.2 = 2 (exactly, no ceiling).
+    expect(batches[0]!.nodes.length).toBe(2);
+    expect(batches.reduce((n, b) => n + b.nodes.length, 0)).toBe(10);
+  });
+
+  it('percentage uses a NEGATIVE batchSize as the 20% fallback (kills `&&`→`||`)', async () => {
+    const e = engine();
+    // batchSize = -5. `batchSize && batchSize > 0` is `-5 && false` = false → 20%.
+    // A `&&`→`||` mutant yields `-5 || false` = -5 (truthy) → pct = -5, which
+    // collapses every batch to size 1 instead of 20%.
+    await e.execute(makePlan({ nodes: ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'], batchStrategy: 'percentage', batchSize: -5 }));
+    const batches = e.getBatches();
+    expect(batches[0]!.nodes.length).toBe(2); // 20% of 10 = 2, not 1
+  });
+});
+
+describe('rollingupgrade partial-failure node marking', () => {
+  it('marks a node failed when its health check throws (mixed batch)', async () => {
+    const e = engine();
+    // First node healthy, second node's check throws → second marked failed,
+    // first is still in-flight (health_check) when the batch fails.
+    e.registerHealthCheck('flaky', async (nodeId) => {
+      if (nodeId === 'b') throw new Error('boom');
+      return { healthy: true, nodes: [], evaluatedAt: Date.now() };
+    });
+    const s = await e.execute(makePlan({
+      nodes: ['a', 'b'],
+      batchSize: 2,
+      healthCheckNames: ['flaky'],
+      rollbackTrigger: 'on_first_failure',
+    }));
+    // Batch failed; the throwing node is failed; rollback (on_first_failure)
+    // rolls back the healthy in-flight node.
+    expect(s.failedNodes).toBeGreaterThanOrEqual(1);
+    expect(s.events.some((ev) => ev.type === 'batch_failed')).toBe(true);
+  });
+
+  it('marks all non-completed nodes failed when a check returns unhealthy', async () => {
+    const e = engine();
+    e.registerHealthCheck('bad', unhealthy);
+    const s = await e.execute(makePlan({
+      nodes: ['a', 'b'],
+      batchSize: 2,
+      healthCheckNames: ['bad'],
+      rollbackTrigger: 'manual_only',
+    }));
+    // unhealthy returns healthy:false (no throw) → _checkBatchHealth marks every
+    // non-completed node failed via the `node.status !== "completed" && ...`
+    // guard, then manual_only leaves them failed (no rollback).
+    expect(s.failedNodes).toBe(2);
+    expect(s.rolledBackNodes).toBe(0);
+  });
+});
+
+describe('rollingupgrade in-flight rollback (draining/upgrading/health_check)', () => {
+  it('rollback() rolls back all nodes that have progressed past pending', async () => {
+    const e = engine();
+    e.registerHealthCheck('ok', healthy);
+    await e.execute(makePlan({ nodes: ['a', 'b'], batchSize: 1, healthCheckNames: ['ok'], rollbackTrigger: 'manual_only' }));
+    const rb = await e.rollback();
+    // Both completed nodes → rolled_back.
+    expect(rb.rolledBackNodes).toBe(2);
+    expect(rb.upgradedNodes).toBe(0);
+    expect(e.getBatches().every((b) => b.status === 'rolled_back')).toBe(true);
+  });
+
+  it('rollback() emits rollback_completed with the rolled-back node count', async () => {
+    const e = engine();
+    e.registerHealthCheck('ok', healthy);
+    await e.execute(makePlan({ nodes: ['a', 'b'], batchSize: 1, healthCheckNames: ['ok'], rollbackTrigger: 'manual_only' }));
+    await e.rollback();
+    const ev = e.getEvents().find((x) => x.type === 'rollback_completed');
+    expect(ev).toBeDefined();
+    expect((ev!.details as any).rolledBackNodes).toBe(2);
+  });
+});
+
+
+describe('rollingupgrade on_batch_threshold tolerance', () => {
+  it('tolerates partial failure below threshold and promotes healthy nodes', async () => {
+    const e = engine();
+    // node 'a' fails, 'b' and 'c' healthy → failure ratio 1/3 ≈ 0.33 < 0.5.
+    e.registerHealthCheck('mixed', async (nodeId) => {
+      return nodeId === 'a'
+        ? { healthy: false, nodes: [{ healthy: false, details: {}, checkedAt: Date.now() }], evaluatedAt: Date.now() }
+        : { healthy: true, nodes: [], evaluatedAt: Date.now() };
+    });
+    const s = await e.execute(makePlan({
+      nodes: ['a', 'b', 'c'],
+      batchSize: 3,
+      healthCheckNames: ['mixed'],
+      rollbackTrigger: 'on_batch_threshold',
+      batchFailureThreshold: 0.5,
+    }));
+    expect(s.phase).toBe('completed');
+    // Healthy nodes promoted, failed node kept failed.
+    const statuses = e.getBatches()[0]!.nodes.map((n) => n.status).sort();
+    expect(statuses).toEqual(['completed', 'completed', 'failed']);
+    expect(s.failedNodes).toBe(1);
+    expect(s.upgradedNodes).toBe(2);
+  });
+
+  it('rolls back when failure ratio reaches the threshold', async () => {
+    const e = engine();
+    // Both nodes fail → ratio 2/2 = 1.0 >= 0.5 → rollback.
+    e.registerHealthCheck('bad', unhealthy);
+    const s = await e.execute(makePlan({
+      nodes: ['a', 'b'],
+      batchSize: 2,
+      healthCheckNames: ['bad'],
+      rollbackTrigger: 'on_batch_threshold',
+      batchFailureThreshold: 0.5,
+    }));
+    expect(s.phase).toBe('failed');
+    // The failing batch is marked failed (not rolled back); every node failed.
+    expect(s.failedNodes).toBe(2);
+  });
+
+  it('treats a throwing check as a failed node for threshold accounting', async () => {
+    const e = engine();
+    e.registerHealthCheck('flaky', async (nodeId) => {
+      if (nodeId === 'a') throw new Error('boom');
+      return { healthy: true, nodes: [], evaluatedAt: Date.now() };
+    });
+    const s = await e.execute(makePlan({
+      nodes: ['a', 'b'],
+      batchSize: 2,
+      healthCheckNames: ['flaky'],
+      rollbackTrigger: 'on_batch_threshold',
+      batchFailureThreshold: 0.51,
+    }));
+    // One throwing node → ratio 1/2 = 0.5 < 0.51 → tolerated.
+    expect(s.phase).toBe('completed');
+    expect(s.failedNodes).toBe(1);
+    expect(s.upgradedNodes).toBe(1);
+  });
+});
+
+describe('rollingupgrade batch_threshold failure reason precision', () => {
+  it('reports the exact threshold percentage in the failure reason', async () => {
+    const e = engine();
+    e.registerHealthCheck('bad', unhealthy);
+    await e.execute(makePlan({
+      nodes: ['a', 'b'],
+      batchSize: 2,
+      healthCheckNames: ['bad'],
+      rollbackTrigger: 'on_batch_threshold',
+      batchFailureThreshold: 0.5,
+    }));
+    const ev = e.getEvents().find((x) => x.type === 'batch_failed');
+    expect(ev).toBeDefined();
+    // `threshold * 100` renders "50" (mutant `*`->`/` would render "0.005").
+    expect((ev!.details as any).reason).toContain('50%');
+  });
+});

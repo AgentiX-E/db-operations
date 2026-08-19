@@ -383,18 +383,30 @@ export class RollingUpgradeOrchestrator implements IRollingUpgrade {
     const plan = this.plan!;
 
     if (!health.healthy) {
+      if (plan.rollbackTrigger === "on_batch_threshold") {
+        const threshold = plan.batchFailureThreshold ?? 0.5;
+        const failed = batch.nodes.filter((n) => n.status === "failed").length;
+        if (failed / batch.nodes.length >= threshold) {
+          this._handleFailure("batch_threshold", batch, `Batch failure threshold ${threshold * 100}% reached`);
+          return false;
+        }
+        // Below threshold: tolerate the partial failure. Promote the healthy
+        // nodes to completed and leave the failed ones as-is, then continue
+        // the rolling upgrade.
+        for (const node of batch.nodes) {
+          if (node.status !== "failed") {
+            node.status = "completed";
+            node.completedAt = Date.now();
+          }
+        }
+        batch.status = "completed";
+        this._emit("batch_promoted", { batchIndex: batch.index });
+        this.phase = "rolling";
+        return true;
+      }
+
       this._handleFailure("batch", batch, "Batch health check failed");
       return false;
-    }
-
-    // Rollback trigger: batch threshold
-    if (plan.rollbackTrigger === "on_batch_threshold") {
-      const threshold = plan.batchFailureThreshold ?? 0.5;
-      const failed = batch.nodes.filter((n) => n.status === "failed").length;
-      if (failed / batch.nodes.length >= threshold) {
-        this._handleFailure("batch_threshold", batch, `Batch failure threshold ${threshold * 100}% reached`);
-        return false;
-      }
     }
 
     // Promote batch
@@ -444,6 +456,7 @@ export class RollingUpgradeOrchestrator implements IRollingUpgrade {
     let allHealthy = true;
 
     for (const node of batch.nodes) {
+      let nodeHealthy = true;
       for (const checkName of checks) {
         const fn = this.healthChecks.get(checkName);
         if (!fn) continue;
@@ -451,20 +464,18 @@ export class RollingUpgradeOrchestrator implements IRollingUpgrade {
         try {
           const result = await fn(node.nodeId);
           nodeResults.push(...result.nodes);
-          if (!result.healthy) allHealthy = false;
+          if (!result.healthy) nodeHealthy = false;
         } catch {
-          allHealthy = false;
-          node.status = "failed";
+          nodeHealthy = false;
         }
       }
-    }
 
-    // Mark failed nodes
-    if (!allHealthy) {
-      for (const node of batch.nodes) {
-        if (node.status !== "completed" && node.status !== "rolled_back") {
-          node.status = "failed";
-        }
+      // Mark only the nodes whose checks actually failed. Healthy nodes stay in
+      // their in-flight `health_check` state so callers (e.g. on_batch_threshold)
+      // can distinguish a partial failure from a total one.
+      if (!nodeHealthy) {
+        node.status = "failed";
+        allHealthy = false;
       }
     }
 

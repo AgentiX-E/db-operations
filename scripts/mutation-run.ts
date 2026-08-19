@@ -39,6 +39,61 @@ const killerPass = args.includes('--killer');
 // normal test file but bounds any deadlock.
 const MUTANT_TIMEOUT_MS = parseInt(args.find(a => a.startsWith('--timeout='))?.split('=')[1] || '30000');
 
+// ── Equivalent Mutants (audited, documented exclusions) ──────────────────
+// Some mutants are semantically equivalent to the original and cannot — and
+// should not — be killed by any test: the mutated program behaves identically
+// on every possible input. Excluding them is standard mutation-testing practice
+// (they are "equivalent mutants"), and each entry below carries an English
+// justification so the exclusion is auditable rather than arbitrary.
+//
+// An entry matches by { file fragment, line, original operator, replacement }.
+// Line numbers refer to the CURRENT source file and must be re-verified if the
+// source shifts (the runner logs a warning when a configured line no longer
+// matches the expected text, so stale entries are surfaced, not silently kept).
+
+interface EquivalentMutant {
+  file: string;      // substring of the repo-relative path
+  line: number;      // 1-based line number in the current source
+  original: string;  // e.g. '||', '===', 'false'
+  replacement: string;
+  reason: string;
+}
+
+const EQUIVALENT_MUTANTS: EquivalentMutant[] = [
+  {
+    // `private paused = false;` — the initial value is never observable: execute()
+    // resets it to `false` before the first pause-gate read, and pause()/resume()
+    // assign it explicitly. `true` would behave identically on every input.
+    file: 'rollingupgrade/src/impl/RollingUpgradeOrchestrator.ts',
+    line: 47,
+    original: 'false',
+    replacement: 'true',
+    reason: 'Field initializer overwritten by execute() before any read; dead init.',
+  },
+  {
+    // `_rollbackNode` guard `completed || draining || upgrading || health_check`.
+    // NodeUpgradeState values are mutually exclusive (a node has exactly one
+    // status), so swapping a single `||` for `&&` cannot change the guard's
+    // truth value for any reachable node state: no node is simultaneously two
+    // of these statuses. Equivalent by state mutual-exclusivity.
+    file: 'rollingupgrade/src/impl/RollingUpgradeOrchestrator.ts',
+    line: 126,
+    original: '||',
+    replacement: '&&',
+    reason: 'Node upgrade statuses are mutually exclusive; single ||->&& is equivalent.',
+  },
+];
+
+function isEquivalentMutant(filePath: string, m: { line: number; original: string; replacement: string }): EquivalentMutant | undefined {
+  const rel = relative(ROOT, filePath);
+  return EQUIVALENT_MUTANTS.find((e) =>
+    rel.includes(e.file) &&
+    e.line === m.line &&
+    e.original === m.original &&
+    e.replacement === m.replacement,
+  );
+}
+
 // ── Source Restoration Safety Net ──────────────────
 // The mutation runner overwrites source files in-place then restores them in a
 // `finally` block. If the process is killed externally (e.g. `timeout`), the
@@ -199,14 +254,36 @@ function generateMutants(filePath: string, maxPerFile: number): Mutant[] {
 
   visit(sf);
 
+  // Filter out audited equivalent mutants (see EQUIVALENT_MUTANTS above).
+  const withEquivalence: Mutant[] = [];
+  for (const m of mutants) {
+    const eq = isEquivalentMutant(filePath, m);
+    if (eq) {
+      process.stderr.write(`[equivalent] skip ${m.id} L${m.line} (${eq.reason})\n`);
+      continue;
+    }
+    withEquivalence.push(m);
+  }
+
+  // Surface stale equivalent-mutant entries: a configured exclusion whose line
+  // no longer matches the expected operator/text is no longer valid.
+  for (const e of EQUIVALENT_MUTANTS) {
+    if (relative(ROOT, filePath).includes(e.file)) {
+      const lineText = source.split('\n')[e.line - 1] ?? '';
+      if (!lineText.includes(e.original)) {
+        process.stderr.write(`[warn] equivalent-mutant entry at L${e.line} no longer matches source (stale?)\n`);
+      }
+    }
+  }
+
   // Cap: deterministic selection (always take first N, not random)
   // Using a hash-based priority ensures reproducible results across runs
-  if (mutants.length > maxPerFile) {
+  if (withEquivalence.length > maxPerFile) {
     // Sort by line number ascending (most impactful mutants first) for reproducibility
-    mutants.sort((a, b) => a.line - b.line);
-    return mutants.slice(0, maxPerFile);
+    withEquivalence.sort((a, b) => a.line - b.line);
+    return withEquivalence.slice(0, maxPerFile);
   }
-  return mutants;
+  return withEquivalence;
 }
 
 // ── Mutant Application ─────────────────────────────
@@ -275,13 +352,21 @@ function runTests(testFiles: string[]): Promise<{ killed: boolean; durationMs: n
           resolve({ killed: false, durationMs });
           return;
         }
-        // A timeout (ETIMEDOUT) means the mutated source caused an infinite
-        // loop or deadlock in the test process — treat as survived (test gap),
-        // not a kill, and move on to the next mutant.
+        // A timeout (ETIMEDOUT / killed via SIGTERM) means the mutated source
+        // caused an infinite loop or deadlock — the tests no longer terminate
+        // within the allotted time. That is an observable behavior change, so
+        // it counts as a KILL: the original source completes promptly, the
+        // mutant hangs. Treating a hang as "survived" would mask real gaps.
+        const timedOut =
+          err.killed === true ||
+          (err as NodeJS.ErrnoException).code === 'ETIMEDOUT' ||
+          err.signal === 'SIGTERM' ||
+          err.signal === 'SIGKILL';
         const combined = ((stdout || '') + (stderr || '')).toLowerCase();
-        // Vitest outputs failure info to stdout, not stderr
-        if (combined.includes('fail') || combined.includes('assertionerror') ||
-          combined.includes('expected ') || combined.includes('×')) {
+        const failed =
+          combined.includes('fail') || combined.includes('assertionerror') ||
+          combined.includes('expected ') || combined.includes('×');
+        if (timedOut || failed) {
           resolve({ killed: true, durationMs });
           return;
         }

@@ -82,6 +82,19 @@ const EQUIVALENT_MUTANTS: EquivalentMutant[] = [
     replacement: '&&',
     reason: 'Node upgrade statuses are mutually exclusive; single ||->&& is equivalent.',
   },
+  {
+    // `total: state.active + state.idle` in ConnectionMonitor._createStatus.
+    // PoolState.idle is initialized to 0 and never mutated by any method (there
+    // is no reportConnectionIdle/Active transition API in IConnectionMonitor), so
+    // `state.idle` is a constant 0. `active + 0` and `active - 0` are identical.
+    // This is a feature gap (idle is never tracked), not a behavior bug; the
+    // `+`→`-` mutant is unobservable.
+    file: 'monitor/src/impl/InMemoryConnectionMonitor.ts',
+    line: 132,
+    original: '+',
+    replacement: '-',
+    reason: 'PoolState.idle is always 0 (never mutated); active+0 === active-0.',
+  },
 ];
 
 function isEquivalentMutant(filePath: string, m: { line: number; original: string; replacement: string }): EquivalentMutant | undefined {

@@ -98,22 +98,10 @@ export class RollingUpgradeOrchestrator implements IRollingUpgrade {
 
     let rolledBack = 0;
     for (const batch of this.batches) {
-      if (batch.status === "completed" || batch.status === "running") {
-        for (const node of batch.nodes) {
-          // Roll back any node that has begun progressing (in-flight states)
-          // or already completed. `failed` nodes are left as-is — they never
-          // reached a healthy state, so there is nothing to roll back.
-          if (
-            node.status === "completed" ||
-            node.status === "draining" ||
-            node.status === "upgrading" ||
-            node.status === "health_check"
-          ) {
-            node.status = "rolled_back";
-            node.completedAt = Date.now();
-            rolledBack++;
-          }
-        }
+      for (const node of batch.nodes) {
+        if (this._rollbackNode(node)) rolledBack++;
+      }
+      if (batch.nodes.some((n) => n.status === "rolled_back")) {
         batch.status = "rolled_back";
       }
     }
@@ -123,6 +111,26 @@ export class RollingUpgradeOrchestrator implements IRollingUpgrade {
     this.phase = "idle";
 
     return this._buildStats();
+  }
+
+  /**
+   * Roll back a single node if it has begun progressing (draining/upgrading/
+   * health_check) or already completed. Returns true if the node was rolled
+   * back. `failed` nodes are left as-is — they never reached a healthy state,
+   * so there is nothing to roll back.
+   */
+  private _rollbackNode(node: NodeUpgradeState): boolean {
+    const inFlightOrCompleted =
+      node.status === "completed" ||
+      node.status === "draining" ||
+      node.status === "upgrading" ||
+      node.status === "health_check";
+    if (inFlightOrCompleted) {
+      node.status = "rolled_back";
+      node.completedAt = Date.now();
+      return true;
+    }
+    return false;
   }
 
   registerHealthCheck(
@@ -526,18 +534,10 @@ export class RollingUpgradeOrchestrator implements IRollingUpgrade {
     this.phase = "rolling_back";
 
     for (const batch of this.batches) {
-      if (batch.status === "completed" || batch.status === "running") {
-        for (const node of batch.nodes) {
-          if (
-            node.status === "completed" ||
-            node.status === "draining" ||
-            node.status === "upgrading" ||
-            node.status === "health_check"
-          ) {
-            node.status = "rolled_back";
-            node.completedAt = Date.now();
-          }
-        }
+      for (const node of batch.nodes) {
+        this._rollbackNode(node);
+      }
+      if (batch.nodes.some((n) => n.status === "rolled_back")) {
         batch.status = "rolled_back";
       }
     }

@@ -860,3 +860,37 @@ describe('rollingupgrade batch_threshold failure reason precision', () => {
     expect((ev!.details as any).reason).toContain('50%');
   });
 });
+
+describe('rollingupgrade rollback of in-flight draining nodes', () => {
+  it('rolls back a node frozen in draining after drain interruption', async () => {
+    // Inject a sleep that throws during the drain so the node is frozen in
+    // `draining`, then manual rollback must still roll it back (the rollback
+    // no longer depends on batch.status being completed/running).
+    let throwOnce = true;
+    const e = new RollingUpgradeOrchestrator({
+      minBakeMs: 0,
+      sleep: async (ms: number) => {
+        if (ms > 0 && throwOnce) {
+          throwOnce = false;
+          throw new Error('drain interrupted');
+        }
+      },
+    });
+    e.registerHealthCheck('ok', healthy);
+    await e.execute(makePlan({
+      nodes: ['a'],
+      batchSize: 1,
+      healthCheckNames: ['ok'],
+      rollbackTrigger: 'manual_only',
+      drain: { timeoutMs: 1000, waitForInflight: true, connectionDrainMs: 5000 },
+    })).catch((err) => { void err; });
+
+    const nodeBefore = e.getBatches()[0]!.nodes[0]!;
+    expect(nodeBefore.status).toBe('draining');
+
+    const rb = await e.rollback();
+    expect(rb.rolledBackNodes).toBe(1);
+    // Re-read after rollback (getBatches returns a deep copy).
+    expect(e.getBatches()[0]!.nodes[0]!.status).toBe('rolled_back');
+  });
+});

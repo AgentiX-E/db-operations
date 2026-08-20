@@ -14,7 +14,7 @@
  */
 
 import { describe, it, expect, beforeEach } from "vitest";
-import { RetentionPolicyEvaluator } from "../impl/RetentionPolicyEvaluator.js";
+import { RetentionPolicyEvaluator, parseDurationToMs } from "../impl/RetentionPolicyEvaluator.js";
 import type { BackupMetadata, RetentionPolicy } from "@agentix-e/db-operations-core/types";
 
 function makeSnapshot(overrides: Partial<BackupMetadata> & { id: string }): BackupMetadata {
@@ -218,5 +218,100 @@ describe("RET: RetentionPolicyEvaluator", () => {
     const result = evaluator.evaluate(snapshots);
     expect(result.length).toBe(1);
     expect(result[0]!.snapshotId).toBe("veryold");
+  });
+});
+
+// ── Precise parseDurationToMs arithmetic (kills `*`→`/` and `+`→`-`) ──
+
+describe("RET: parseDurationToMs exact arithmetic", () => {
+  it("parses a full ISO-8601 duration to the exact millisecond total", () => {
+    // P1DT2H3M4S = 1*86400000 + 2*3600000 + 3*60000 + 4*1000
+    expect(parseDurationToMs("P1DT2H3M4S")).toBe(93_784_000);
+  });
+
+  it("parses each unit independently with exact values", () => {
+    expect(parseDurationToMs("P7D")).toBe(7 * 86_400_000);
+    expect(parseDurationToMs("PT1H")).toBe(3_600_000);
+    expect(parseDurationToMs("PT30M")).toBe(1_800_000);
+    expect(parseDurationToMs("PT30S")).toBe(30_000);
+  });
+
+  it("parses a days+hours mix exactly (no minutes/seconds)", () => {
+    // P2DT5H = 2*86400000 + 5*3600000 = 190800000
+    expect(parseDurationToMs("P2DT5H")).toBe(190_800_000);
+  });
+
+  it("falls back to plain hours for a numeric string", () => {
+    expect(parseDurationToMs("48")).toBe(48 * 3_600_000);
+  });
+
+  it("returns 0 for an unparseable duration string", () => {
+    expect(parseDurationToMs("not-a-duration")).toBe(0);
+  });
+});
+
+// ── Precise snapAge arithmetic (kills `-`→`+` on Date.now() - createdAt) ──
+
+describe("RET: snapAge elapsed-time arithmetic", () => {
+  it("keepRecent computes age as Date.now() MINUS createdAt (not plus)", () => {
+    vi.spyOn(Date, "now").mockReturnValue(2_000_000);
+    const evaluator = new RetentionPolicyEvaluator({
+      maxFullSnapshots: 1, // newest (A) is always kept; B and C become candidates
+      keepRecent: "PT1H", // 3_600_000 ms
+      maxTotalBytes: 0,
+    });
+    // B (300s old) is within keepRecent: 2_000_000 - 1_700_000 = 300_000 < 3.6M → kept.
+    // The `-`→`+` mutant yields 2_000_000 + 1_700_000 = 3_700_000 > 3.6M → deleted.
+    const snapshots = [
+      makeSnapshot({ id: "A", createdAt: new Date(1_900_000) }), // newest → kept by maxFullSnapshots
+      makeSnapshot({ id: "B", createdAt: new Date(1_700_000) }), // candidate, keepRecent protects it
+      makeSnapshot({ id: "C", createdAt: new Date(1_000_000) }), // candidate
+    ];
+    const result = evaluator.evaluate(snapshots);
+    const bDeleted = result.find((s) => s.snapshotId === "B");
+    expect(bDeleted).toBeUndefined(); // B is within keepRecent → NOT deleted
+    vi.restoreAllMocks();
+  });
+
+  it("minAge computes age as Date.now() MINUS createdAt (not plus)", () => {
+    vi.spyOn(Date, "now").mockReturnValue(2_000_000);
+    const evaluator = new RetentionPolicyEvaluator({
+      maxFullSnapshots: 1,
+      minAge: "PT1H", // 3_600_000 ms
+      maxTotalBytes: 0,
+    });
+    // B (300s old) has not yet met minAge: 2_000_000 - 1_700_000 = 300_000 < 3.6M → keep.
+    // `+` mutant yields 3_700_000 > 3.6M → delete B.
+    const snapshots = [
+      makeSnapshot({ id: "A", createdAt: new Date(1_900_000) }),
+      makeSnapshot({ id: "B", createdAt: new Date(1_700_000) }),
+      makeSnapshot({ id: "C", createdAt: new Date(1_000_000) }),
+    ];
+    const result = evaluator.evaluate(snapshots);
+    const bDeleted = result.find((s) => s.snapshotId === "B");
+    expect(bDeleted).toBeUndefined(); // B is younger than minAge → NOT deleted
+    vi.restoreAllMocks();
+  });
+});
+
+// ── Precise excess arithmetic (kills `-`→`+` on totalBytes - maxTotalBytes) ──
+
+describe("RET: maxTotalBytes excess calculation precision", () => {
+  it("deletes exactly enough snapshots to come under the byte limit", () => {
+    const evaluator = new RetentionPolicyEvaluator({
+      maxFullSnapshots: 10, // count not a factor
+      maxTotalBytes: 3 * 1024 * 1024, // 3 MB
+    });
+    // Total 6 MB; each snapshot 2 MB. excess = 6 - 3 = 3 MB.
+    // Deleting c (2 MB) leaves 1 MB excess → delete b (2 MB) → 0 excess, then break.
+    // The `-`→`+` mutant makes excess ~huge, deleting ALL three (including a).
+    const snapshots = [
+      makeSnapshot({ id: "a", sizeBytes: 2 * 1024 * 1024, createdAt: new Date(3_000) }),
+      makeSnapshot({ id: "b", sizeBytes: 2 * 1024 * 1024, createdAt: new Date(2_000) }),
+      makeSnapshot({ id: "c", sizeBytes: 2 * 1024 * 1024, createdAt: new Date(1_000) }),
+    ];
+    const result = evaluator.evaluate(snapshots);
+    const ids = result.map((r) => r.snapshotId).sort();
+    expect(ids).toEqual(["b", "c"]); // exactly two deleted; newest "a" survives
   });
 });

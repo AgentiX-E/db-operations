@@ -1,7 +1,7 @@
 /**
  * BackupVerifier 测试 — 覆盖 checksum 计算、完整性验证、流验证。
  */
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import crypto from 'crypto';
 import { BackupVerifier } from '../impl/BackupVerifier.js';
 
@@ -152,5 +152,27 @@ describe('BackupVerifier', () => {
     const result = await verifier.verify('no-check', data);
     expect(result.valid).toBe(true);
     expect(result.expectedChecksum).toBeUndefined();
+  });
+
+  // ── Precise durationMs (kills the `-`→`+` elapsed-time mutant) ──
+
+  it('verify reports the exact elapsed milliseconds', async () => {
+    const spy = vi.spyOn(Date, 'now')
+      .mockReturnValueOnce(1_000)   // start
+      .mockReturnValueOnce(1_234);  // end
+    const data = Buffer.from('x');
+    const result = await verifier.verify('bp-dur', data);
+    expect(result.durationMs).toBe(234);
+    spy.mockRestore();
+  });
+
+  it('verifyStream reports the exact elapsed milliseconds', async () => {
+    const spy = vi.spyOn(Date, 'now')
+      .mockReturnValueOnce(5_000)
+      .mockReturnValueOnce(5_150);
+    async function* gen(): AsyncIterable<Buffer> { yield Buffer.from('a'); }
+    const result = await verifier.verifyStream(gen());
+    expect(result.durationMs).toBe(150);
+    spy.mockRestore();
   });
 });

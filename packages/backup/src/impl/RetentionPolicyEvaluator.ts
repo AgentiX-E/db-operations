@@ -108,7 +108,7 @@ export class RetentionPolicyEvaluator implements IBackupRetentionPolicy {
  * Parse a simple ISO-8601 duration string to milliseconds.
  * Supports days (P7D), hours (PT1H), minutes (PT30M), seconds (PT30S).
  */
-function parseDurationToMs(duration: string): number {
+export function parseDurationToMs(duration: string): number {
   const match = duration.match(/^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/);
   if (!match) {
     // Fallback: try to parse as a plain number of hours

@@ -233,6 +233,14 @@ describe('InMemoryPITRManager', () => {
     const disabled = new InMemoryPITRManager('0/0', false);
     expect(disabled.isEnabled()).toBe(false);
   });
+
+  // The `enabled = true` default parameter must be observable: constructing
+  // without the enabled argument yields an enabled manager (the `true`→`false`
+  // mutant would report disabled).
+  it('defaults to enabled when the enabled argument is omitted', () => {
+    const pitr = new InMemoryPITRManager('0/0');
+    expect(pitr.isEnabled()).toBe(true);
+  });
 });
 
 // ── B11–B13: InMemoryStorageBackend ──────────────────────────────────

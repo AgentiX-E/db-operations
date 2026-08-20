@@ -76,16 +76,6 @@ export class BackupVerifier implements IBackupVerifier {
       }
     }
 
-    // 增量校验：逐块验证
-    if (valid && data.length > chunkSize) {
-      for (let offset = 0; offset < data.length; offset += chunkSize) {
-        const chunk = data.subarray(offset, Math.min(offset + chunkSize, data.length));
-        const chunkHash = crypto.createHash('sha256').update(chunk).digest('hex');
-        // 逐块 hash 不等于整体 hash，但可以记录用于增量比较
-        // 实际生产中会存储 merkle tree
-      }
-    }
-
     // 存储 checksum 用于后续比较
     this._checksums.set(backupId, computedChecksum);
 

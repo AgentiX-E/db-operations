@@ -92,4 +92,23 @@ describe('NoopMaintenanceExecutor', () => {
     expect(status.enabled).toBe(false);
     expect(status.threshold).toBe(500);
   });
+
+  // ── Default false when flags omitted (kills `?? false` → `?? true`) ──
+
+  it('vacuum defaults dryRun and full to false when omitted', async () => {
+    const result = await executor.vacuum({ target: '*' });
+    expect(result.details).toHaveProperty('dryRun', false);
+    expect(result.details).toHaveProperty('full', false);
+  });
+
+  it('analyze defaults dryRun to false when omitted', async () => {
+    const result = await executor.analyze({ target: 't' });
+    expect(result.details).toHaveProperty('dryRun', false);
+  });
+
+  it('reindex defaults dryRun and isTable to false when omitted', async () => {
+    const result = await executor.reindex({ target: 'idx' });
+    expect(result.details).toHaveProperty('dryRun', false);
+    expect(result.details).toHaveProperty('isTable', false);
+  });
 });

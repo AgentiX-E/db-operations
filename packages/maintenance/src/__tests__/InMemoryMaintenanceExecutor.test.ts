@@ -20,7 +20,7 @@
  *   M13 – repeated operations idempotent
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { InMemoryMaintenanceExecutor } from '../impl/InMemoryMaintenanceExecutor.js';
 
 describe('InMemoryMaintenanceExecutor', () => {
@@ -321,5 +321,60 @@ describe('InMemoryMaintenanceExecutor', () => {
     // Modifying the returned array should not affect internal state
     (log as any[]).push({ test: true });
     expect(executor.opsLog).toHaveLength(0);
+  });
+
+  // ── Precise default-flag + elapsed-time assertions (kill survivors) ──
+
+  it('dry-run vacuum defaults full to false when omitted', async () => {
+    const result = await executor.vacuum({ target: 't', dryRun: true });
+    expect(result.details).toHaveProperty('full', false);
+  });
+
+  it('non-dry-run vacuum reports dryRun=false and full reflects input', async () => {
+    const result = await executor.vacuum({ target: 't' }); // no full, no dryRun
+    expect(result.details).toHaveProperty('dryRun', false);
+    expect(result.details).toHaveProperty('full', false);
+    expect(result.message).toContain('VACUUM completed'); // non-full path
+  });
+
+  it('analyze defaults dryRun to false when omitted', async () => {
+    const result = await executor.analyze({ target: 't' });
+    expect(result.details).toHaveProperty('dryRun', false);
+  });
+
+  it('reindex defaults dryRun and isTable to false when omitted', async () => {
+    const result = await executor.reindex({ target: 'idx_users_email' });
+    expect(result.details).toHaveProperty('dryRun', false);
+    expect(result.details).toHaveProperty('isTable', false);
+  });
+
+  it('reindex does NOT match by tableName when isTable is falsy', async () => {
+    const before = await executor.getIndexFragmentation('orders');
+    const ratiosBefore = before.map((f) => f.fragmentationRatio);
+
+    // target 'orders' matches a tableName, but without isTable only indexName is compared
+    await executor.reindex({ target: 'orders' });
+
+    const after = await executor.getIndexFragmentation('orders');
+    const ratiosAfter = after.map((f) => f.fragmentationRatio);
+    expect(ratiosAfter).toEqual(ratiosBefore); // unchanged — no match by table when isTable is falsy
+  });
+
+  it('vacuum reports exact elapsed milliseconds', async () => {
+    const spy = vi.spyOn(Date, 'now')
+      .mockReturnValueOnce(10_000)
+      .mockReturnValueOnce(10_042);
+    const result = await executor.vacuum({ target: '*' });
+    expect(result.durationMs).toBe(42);
+    spy.mockRestore();
+  });
+
+  it('reindex reports exact elapsed milliseconds', async () => {
+    const spy = vi.spyOn(Date, 'now')
+      .mockReturnValueOnce(20_000)
+      .mockReturnValueOnce(20_007);
+    const result = await executor.reindex({ target: 'idx_x' });
+    expect(result.durationMs).toBe(7);
+    spy.mockRestore();
   });
 });

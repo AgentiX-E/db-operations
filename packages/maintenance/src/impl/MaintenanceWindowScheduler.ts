@@ -231,7 +231,7 @@ export class MaintenanceWindowScheduler implements IMaintenanceScheduler {
         // Decide which window has lower priority and cancel its instances
         const lowerAlone = winA.priority < winB.priority;
         const deferWin = lowerAlone ? winA : winB;
-        for (const inst of this.getWindowInstances(deferWin.id)) {
+        for (const inst of this._getMutableInstances(deferWin.id)) {
           const isSched = inst.state === "scheduled";
           const isApproved = inst.state === "approved";
           if (isSched || isApproved) {
@@ -245,7 +245,7 @@ export class MaintenanceWindowScheduler implements IMaintenanceScheduler {
 
     if (isNewerStrategy) {
       for (const wid of conflict.conflictingWindowIds) {
-        const instances = this.getWindowInstances(wid);
+        const instances = this._getMutableInstances(wid);
         if (instances.length === 0) continue;
 
         // Find the newest scheduled/approved instance via explicit loop
@@ -472,9 +472,11 @@ export class MaintenanceWindowScheduler implements IMaintenanceScheduler {
       const seen = new Set<number>();
       const year = cursor.getUTCFullYear();
       const month = cursor.getUTCMonth();
-      // Last day of current month: day 0 of next month
-      const nextMonth = new Date(year, month + 1, 0);
-      const lastDay = nextMonth.getUTCDate();
+      // Last day of current month: day 0 of next month.
+      // Must use Date.UTC (not local `new Date`) so the day is correct in any
+      // host timezone — a local-time construction read via getUTCDate() is off
+      // by one east of UTC (e.g. UTC+8 reports July as 30 days instead of 31).
+      const lastDay = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
 
       for (const day of targetDays) {
         const clampedDay = day > lastDay ? lastDay : day;
@@ -551,6 +553,24 @@ export class MaintenanceWindowScheduler implements IMaintenanceScheduler {
       ? maxDurVal * MINUTE_MS
       : HOUR_MS;
     const end = start + durationMs;
+
+    // Idempotency guard: projection may run multiple times (e.g. once by
+    // getUpcomingOccurrences and again by detectConflicts → getUpcomingOccurrences).
+    // Re-projecting the same (windowId, scheduledStart) must reuse the existing
+    // instance instead of appending a duplicate; otherwise every repeated
+    // projection leaks a fresh instance and inflates getStats / resolveConflict.
+    const existing = this._findExistingInstance(win.id, start);
+    if (existing) {
+      return {
+        windowId: win.id,
+        instanceId: existing.id,
+        start,
+        end,
+        recurrence: win.recurrence,
+        priority: win.priority,
+      };
+    }
+
     const instanceId = this._nextInstanceId();
     const occ: WindowOccurrence = {
       windowId: win.id,
@@ -632,5 +652,19 @@ export class MaintenanceWindowScheduler implements IMaintenanceScheduler {
 
   private _nextInstanceId(): string {
     return `inst-${this.nextInstanceId++}`;
+  }
+
+  private _findExistingInstance(windowId: string, scheduledStart: number): WindowInstance | null {
+    for (const inst of this.instances.values()) {
+      if (inst.windowId === windowId && inst.scheduledStart === scheduledStart) {
+        return inst;
+      }
+    }
+    return null;
+  }
+
+  /** Internal read-write access to live instances (used by resolveConflict). */
+  private _getMutableInstances(windowId: string): WindowInstance[] {
+    return Array.from(this.instances.values()).filter((i) => i.windowId === windowId);
   }
 }

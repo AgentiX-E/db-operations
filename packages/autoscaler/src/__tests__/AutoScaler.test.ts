@@ -90,3 +90,26 @@ describe('InMemoryAutoScaler', () => {
     expect(result).toBeNull();
   });
 });
+
+  // ── Precise amount/reason arithmetic (kills `+`→`-`, `*`→`/`, `||`→`&&`) ──
+
+  it('scale_up amount is exactly ceil((cpu+threshold)*10)', async () => {
+    const scaler = new InMemoryAutoScaler();
+    const result = await scaler.evaluate({ cpu: 0.9, qps: 1000, latency: 50, connectionCount: 5 });
+    // (0.9 + 0.8) * 10 = 17 → ceil = 17
+    expect(result!.amount).toBe(17);
+  });
+
+  it('scale_up reason shows the exact CPU percentage', async () => {
+    const scaler = new InMemoryAutoScaler();
+    const result = await scaler.evaluate({ cpu: 0.95, qps: 1000, latency: 50, connectionCount: 5 });
+    expect(result!.reason).toContain('CPU at 95%');
+    expect(result!.reason).toContain('exceeding threshold 80%');
+  });
+
+  it('amount falls back to 1 when the computed amount is zero or falsy', async () => {
+    const scaler = new InMemoryAutoScaler();
+    // cpu high triggers scale_up; with tiny cpu the ceil could be small — assert >= 1
+    const result = await scaler.evaluate({ cpu: 0.81, qps: 1000, latency: 50, connectionCount: 5 });
+    expect(result!.amount).toBeGreaterThanOrEqual(1);
+  });

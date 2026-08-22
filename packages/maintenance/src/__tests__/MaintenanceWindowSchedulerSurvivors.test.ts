@@ -356,25 +356,46 @@ describe("MWS-S: weekly/monthly validation", () => {
 });
 
 describe("MWS-S: daily projection invalid/edge startTime", () => {
-  it("daily with invalid startTime produces no occurrences", () => {
+  it("daily with invalid hour (valid minute) produces no occurrences", () => {
     const s = new MaintenanceWindowScheduler();
-    s.registerWindow(win({ id: "di", recurrence: "daily", startTime: "xx:yy" }));
+    s.registerWindow(win({ id: "di", recurrence: "daily", startTime: "xx:30" }));
     s.getUpcomingOccurrences(NOW, NOW + D_MS);
     expect(s.getWindowInstances("di")).toHaveLength(0);
   });
 
-  it("weekly with invalid startTime produces no occurrences", () => {
+  it("daily with invalid minute (valid hour) produces no occurrences", () => {
     const s = new MaintenanceWindowScheduler();
-    s.registerWindow(win({ id: "wi", recurrence: "weekly", startTime: "bad", daysOfWeek: ["mon"] as any }));
+    s.registerWindow(win({ id: "di2", recurrence: "daily", startTime: "03:xx" }));
+    s.getUpcomingOccurrences(NOW, NOW + D_MS);
+    expect(s.getWindowInstances("di2")).toHaveLength(0);
+  });
+
+  it("weekly with invalid hour (valid minute) produces no occurrences", () => {
+    const s = new MaintenanceWindowScheduler();
+    s.registerWindow(win({ id: "wi", recurrence: "weekly", startTime: "xx:30", daysOfWeek: ["mon"] as any }));
     s.getUpcomingOccurrences(NOW, NOW + D_MS);
     expect(s.getWindowInstances("wi")).toHaveLength(0);
   });
 
-  it("monthly with invalid startTime produces no occurrences", () => {
+  it("weekly with invalid minute (valid hour) produces no occurrences", () => {
     const s = new MaintenanceWindowScheduler();
-    s.registerWindow(win({ id: "mi", recurrence: "monthly", startTime: "nope", daysOfMonth: [15] }));
+    s.registerWindow(win({ id: "wi2", recurrence: "weekly", startTime: "03:xx", daysOfWeek: ["mon"] as any }));
+    s.getUpcomingOccurrences(NOW, NOW + D_MS);
+    expect(s.getWindowInstances("wi2")).toHaveLength(0);
+  });
+
+  it("monthly with invalid hour (valid minute) produces no occurrences", () => {
+    const s = new MaintenanceWindowScheduler();
+    s.registerWindow(win({ id: "mi", recurrence: "monthly", startTime: "xx:30", daysOfMonth: [15] }));
     s.getUpcomingOccurrences(NOW, NOW + D_MS);
     expect(s.getWindowInstances("mi")).toHaveLength(0);
+  });
+
+  it("monthly with invalid minute (valid hour) produces no occurrences", () => {
+    const s = new MaintenanceWindowScheduler();
+    s.registerWindow(win({ id: "mi2", recurrence: "monthly", startTime: "03:xx", daysOfMonth: [15] }));
+    s.getUpcomingOccurrences(NOW, NOW + D_MS);
+    expect(s.getWindowInstances("mi2")).toHaveLength(0);
   });
 });
 
@@ -427,5 +448,95 @@ describe("MWS-S: monthly day range boundary", () => {
     for (const i of insts) {
       expect(i.scheduledStart!).toBeGreaterThanOrEqual(from);
     }
+  });
+});
+
+// ── defer_newer newest-selection precision (L256/L259) ──
+
+describe("MWS-S: defer_newer newest-selection precision", () => {
+  it("cancels ONLY the newest scheduled instance, leaving earlier ones scheduled", () => {
+    const s = new MaintenanceWindowScheduler();
+    s.registerWindow(win({ id: "sel", recurrence: "daily", startTime: "03:00" }));
+    s.getUpcomingOccurrences(NOW, NOW + 3 * D_MS);
+    const conflict = {
+      hasConflict: true,
+      conflictingWindowIds: ["sel"],
+      description: "x",
+      recommendation: "defer" as const,
+    };
+    s.resolveConflict(conflict, "defer_newer");
+
+    const insts = s.getWindowInstances("sel");
+    const cancelled = insts.filter((i) => i.state === "cancelled");
+    const scheduled = insts.filter((i) => i.state === "scheduled");
+    // exactly one cancelled, and it is the newest (largest scheduledStart)
+    expect(cancelled).toHaveLength(1);
+    const newestStart = Math.max(...insts.map((i) => i.scheduledStart ?? 0));
+    expect(cancelled[0]!.scheduledStart).toBe(newestStart);
+    // remaining instances stay scheduled
+    expect(scheduled).toHaveLength(insts.length - 1);
+  });
+
+  it("selects among approved instances too (approved participates in newest)", () => {
+    const s = new MaintenanceWindowScheduler();
+    s.registerWindow(win({ id: "appr", recurrence: "daily", startTime: "03:00", requiresApproval: true }));
+    const occs = s.getUpcomingOccurrences(NOW, NOW + 3 * D_MS);
+    expect(occs.length).toBeGreaterThanOrEqual(2);
+    // approve ALL pending instances so every instance is "approved" (not pending)
+    for (const inst of s.getWindowInstances("appr")) {
+      s.approveWindow(inst.id, "dba");
+    }
+    const conflict = {
+      hasConflict: true,
+      conflictingWindowIds: ["appr"],
+      description: "x",
+      recommendation: "defer" as const,
+    };
+    s.resolveConflict(conflict, "defer_newer");
+
+    const insts = s.getWindowInstances("appr");
+    const cancelled = insts.filter((i) => i.state === "cancelled");
+    const approved = insts.filter((i) => i.state === "approved");
+    expect(cancelled).toHaveLength(1);
+    // newest approved instance got cancelled
+    const newestStart = Math.max(...insts.map((i) => i.scheduledStart ?? 0));
+    expect(cancelled[0]!.scheduledStart).toBe(newestStart);
+    expect(approved).toHaveLength(insts.length - 1);
+  });
+});
+
+// ── daily cursor advance boundary (L395/L396) ──
+
+describe("MWS-S: daily cursor advancement boundary", () => {
+  it("does not project an occurrence before the range start", () => {
+    const s = new MaintenanceWindowScheduler();
+    s.registerWindow(win({ id: "adv", recurrence: "daily", startTime: "00:05" }));
+    const start = new Date(NOW);
+    start.setUTCHours(23, 59, 0, 0);
+    const from = start.getTime();
+    const to = from + 2 * D_MS;
+    s.getUpcomingOccurrences(from, to);
+    const insts = s.getWindowInstances("adv");
+    expect(insts.length).toBeGreaterThan(0);
+    // first occurrence must be on/after the range start (advance-to-tomorrow path)
+    expect(insts[0]!.scheduledStart!).toBeGreaterThanOrEqual(from);
+  });
+});
+
+// ── idempotent projection (L659 _findExistingInstance) ──
+
+describe("MWS-S: idempotent projection reuse", () => {
+  it("re-projection reuses the same instance instead of duplicating", () => {
+    const s = new MaintenanceWindowScheduler();
+    s.registerWindow(win({ id: "idem", recurrence: "once", at: new Date(NOW + H_MS).toISOString() }));
+    const first = s.getUpcomingOccurrences(NOW, NOW + 2 * H_MS);
+    expect(first).toHaveLength(1);
+    const before = s.getWindowInstances("idem").length;
+    // second projection must NOT add a duplicate
+    const second = s.getUpcomingOccurrences(NOW, NOW + 2 * H_MS);
+    expect(second).toHaveLength(1);
+    expect(s.getWindowInstances("idem").length).toBe(before);
+    // the returned occurrence references the same instance id
+    expect(second[0]!.instanceId).toBe(first[0]!.instanceId);
   });
 });

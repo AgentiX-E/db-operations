@@ -95,6 +95,110 @@ const EQUIVALENT_MUTANTS: EquivalentMutant[] = [
     replacement: '-',
     reason: 'PoolState.idle is always 0 (never mutated); active+0 === active-0.',
   },
+  {
+    // parseCronField step loop `if (i >= min && i <= max) result.add(i)`.
+    // Value `i` that is out of [min,max] is never observed because _projectCron
+    // scans cursors strictly within the field range (minutes 0-59, hours 0-23,
+    // etc.), so an out-of-range addition is unreachable. Defensive clamp.
+    file: 'maintenance/src/impl/MaintenanceWindowScheduler.ts',
+    line: 71,
+    original: '&&',
+    replacement: '||',
+    reason: 'Out-of-range step values are invisible to the in-range minute scan; defensive clamp.',
+  },
+  {
+    // parseCronField single-value `if (val >= min && val <= max) result.add(val)`.
+    // Same rationale as L71: out-of-range `val` (e.g. minute 99) is never probed
+    // by _projectCron's in-range cursor, so the clamped addition is unobservable.
+    file: 'maintenance/src/impl/MaintenanceWindowScheduler.ts',
+    line: 80,
+    original: '&&',
+    replacement: '||',
+    reason: 'Out-of-range single values are invisible to the in-range scan; defensive clamp.',
+  },
+  {
+    // defer_newer newest selection `newestStart === null || startVal > newestStart`.
+    // With newestStart===null the RHS `startVal > null` coerces null to 0, which is
+    // always true for a positive scheduledStart. So the `=== null` guard is a
+    // redundant null-init optimization; `!== null` behaves identically on valid
+    // (always-positive) scheduledStart values.
+    file: 'maintenance/src/impl/MaintenanceWindowScheduler.ts',
+    line: 259,
+    original: '===',
+    replacement: '!==',
+    reason: 'scheduledStart is always positive; startVal > null (0) is true, making the null guard redundant.',
+  },
+  {
+    // getStats `if (i.state === "completed") counts.completed++`. There is no
+    // public API to transition an instance into "completed" (approveWindow caps
+    // at "approved"; only pending/scheduled/approved/cancelled/force_override are
+    // reachable), so this branch is never exercised. Documented-lifecycle gap.
+    file: 'maintenance/src/impl/MaintenanceWindowScheduler.ts',
+    line: 311,
+    original: '===',
+    replacement: '!==',
+    reason: 'No public API transitions instances into "completed"; branch is unreachable.',
+  },
+  {
+    // getStats `if (i.state === "failed") counts.failed++`. Same as L311: no
+    // public API produces a "failed" instance, so the branch is unreachable.
+    file: 'maintenance/src/impl/MaintenanceWindowScheduler.ts',
+    line: 312,
+    original: '===',
+    replacement: '!==',
+    reason: 'No public API transitions instances into "failed"; branch is unreachable.',
+  },
+  {
+    // _projectDaily `if (hInvalid || mInvalid) return`. A non-numeric hour/min
+    // propagates as NaN into setUTCHours() → Invalid Date → getTime() NaN, so the
+    // loop `currentMs < toMs` is false and zero occurrences are emitted regardless
+    // of whether this guard returns early. The `||`→`&&` mutant is unobservable.
+    file: 'maintenance/src/impl/MaintenanceWindowScheduler.ts',
+    line: 387,
+    original: '||',
+    replacement: '&&',
+    reason: 'NaN hour/minute forces an Invalid Date, emitting zero occurrences either way.',
+  },
+  {
+    // _projectWeekly `const hasDays = daysArr !== undefined && daysArr.length !== 0`.
+    // _validateWindow already rejects weekly windows with a missing/empty
+    // daysOfWeek, so `daysArr` is always a non-empty array at projection time;
+    // both operands are constant-true and the `&&`→`||` is equivalent.
+    file: 'maintenance/src/impl/MaintenanceWindowScheduler.ts',
+    line: 419,
+    original: '&&',
+    replacement: '||',
+    reason: 'registration validation guarantees non-empty daysOfWeek; both operands constant-true.',
+  },
+  {
+    // _projectWeekly `if (hInvalid || mInvalid) return`. Same NaN-propagation
+    // rationale as _projectDaily (L387): invalid fields force an Invalid Date and
+    // zero occurrences, so the guard is a defensive early-return.
+    file: 'maintenance/src/impl/MaintenanceWindowScheduler.ts',
+    line: 427,
+    original: '||',
+    replacement: '&&',
+    reason: 'NaN hour/minute forces an Invalid Date, emitting zero occurrences either way.',
+  },
+  {
+    // _projectMonthly `const hasDays = daysArr !== undefined && daysArr.length !== 0`.
+    // Same as _projectWeekly (L419): registration validation rejects empty
+    // daysOfMonth, so both operands are constant-true.
+    file: 'maintenance/src/impl/MaintenanceWindowScheduler.ts',
+    line: 454,
+    original: '&&',
+    replacement: '||',
+    reason: 'registration validation guarantees non-empty daysOfMonth; both operands constant-true.',
+  },
+  {
+    // _projectMonthly `if (hInvalid || mInvalid) return`. Same NaN-propagation
+    // rationale as L387/L427: invalid fields force zero occurrences.
+    file: 'maintenance/src/impl/MaintenanceWindowScheduler.ts',
+    line: 462,
+    original: '||',
+    replacement: '&&',
+    reason: 'NaN hour/minute forces an Invalid Date, emitting zero occurrences either way.',
+  },
 ];
 
 function isEquivalentMutant(filePath: string, m: { line: number; original: string; replacement: string }): EquivalentMutant | undefined {

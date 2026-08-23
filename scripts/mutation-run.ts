@@ -199,6 +199,41 @@ const EQUIVALENT_MUTANTS: EquivalentMutant[] = [
     replacement: '&&',
     reason: 'NaN hour/minute forces an Invalid Date, emitting zero occurrences either way.',
   },
+  {
+    // `totalNoise === "none"` filter. No code path pushes an action with
+    // action === "none" into history: `forceScale("none")` returns early
+    // without pushing, and `evaluate()` returning null also does not push.
+    // `_recordNoise` is a no-op stub. totalNoise is therefore always 0.
+    file: 'autoscaler/src/impl/PredictiveScalingEngine.ts',
+    line: 292,
+    original: '===',
+    replacement: '!==',
+    reason: 'No public path records a "none" action into history; the filter is always empty.',
+  },
+  {
+    // `if (noTarget || noMemory) return null;` in _computeMemoryGap.
+    // When only one side is true, the other operand (memory or memoryTarget)
+    // is undefined, making `gap = memory - memoryTarget` NaN; NaN propagates
+    // through every comparison (overTarget/wellBelow both false) so the method
+    // still returns null. `||` and `&&` are indistinguishable.
+    file: 'autoscaler/src/impl/PredictiveScalingEngine.ts',
+    line: 352,
+    original: '||',
+    replacement: '&&',
+    reason: 'Missing operand yields NaN gap that collapses both branches to null either way.',
+  },
+  {
+    // `if (hasQPS && positiveQPS)` in _calculateConfidence.
+    // When hasQPS is false, qpsPerNode is undefined so capacity is NaN and the
+    // inner guard (capacity > 0) is false; when positiveQPS is false, qps <= 0
+    // gives a non-positive utilization so boost = max(0, ...) = 0. In either
+    // single-false case confidence is unchanged, so && and || cannot diverge.
+    file: 'autoscaler/src/impl/PredictiveScalingEngine.ts',
+    line: 579,
+    original: '&&',
+    replacement: '||',
+    reason: 'Single-false side yields zero boost (qps<=0) or NaN capacity; confidence unchanged.',
+  },
 ];
 
 function isEquivalentMutant(filePath: string, m: { line: number; original: string; replacement: string }): EquivalentMutant | undefined {

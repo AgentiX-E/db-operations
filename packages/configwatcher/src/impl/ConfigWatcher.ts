@@ -219,7 +219,7 @@ function _computeDiff(
       diffs.push({ key, op: "added", newSnapshot: newVal });
     } else if (newVal === undefined && oldVal !== undefined) {
       diffs.push({ key, op: "removed", oldSnapshot: oldVal });
-    } else if (typeof oldVal === "object" || typeof newVal === "object" &&
+    } else if (typeof oldVal === "object" && typeof newVal === "object" &&
                oldVal !== null && newVal !== null &&
                !Array.isArray(oldVal) && !Array.isArray(newVal)) {
       const fieldChanges = _computeFieldChanges(
@@ -417,7 +417,7 @@ export class ConfigWatcher implements IConfigWatcherV2 {
 
   validateKey(key: string, value: unknown): ValidationResult {
     const field = this.schema[key];
-    if (field) {
+    if (!field) {
       return {
         valid: true,
         errors: [],

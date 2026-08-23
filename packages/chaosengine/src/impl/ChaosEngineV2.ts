@@ -298,14 +298,14 @@ export class ChaosEngineV2 implements IChaosEngineV2 {
   onStepCompleted(callback: (step: number, total: number) => void): () => void {
     this.onStepCompletedListeners.push(callback);
     return () => {
-      this.onStepCompletedListeners = this.onStepCompletedListeners.filter((l) => l === callback);
+      this.onStepCompletedListeners = this.onStepCompletedListeners.filter((l) => l !== callback);
     };
   }
 
   onScenarioCompleted(callback: (result: ScenarioRunResult) => void): () => void {
     this.onScenarioCompletedListeners.push(callback);
     return () => {
-      this.onScenarioCompletedListeners = this.onScenarioCompletedListeners.filter((l) => l === callback);
+      this.onScenarioCompletedListeners = this.onScenarioCompletedListeners.filter((l) => l !== callback);
     };
   }
 

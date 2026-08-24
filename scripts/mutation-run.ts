@@ -234,6 +234,93 @@ const EQUIVALENT_MUTANTS: EquivalentMutant[] = [
     replacement: '||',
     reason: 'Single-false side yields zero boost (qps<=0) or NaN capacity; confidence unchanged.',
   },
+  {
+    // `catch { return false; }` in _globMatch. The pattern string is fully
+    // escaped first (.replace(/[.+^${}()|[\]\\]/g, "\\$&")), then * and ? are
+    // rewritten to .* and .  — the resulting `^...$` is always a valid RegExp,
+    // so `new RegExp(...)` can never throw and the catch is unreachable.
+    file: 'configwatcher/src/impl/ConfigWatcher.ts',
+    line: 301,
+    original: 'false',
+    replacement: 'true',
+    reason: 'Metacharacters are escaped before RegExp construction; the catch is unreachable.',
+  },
+  {
+    // `if (field.pattern && typeof value === "string")`. When pattern is falsy
+    // (no pattern), the original short-circuits out; the mutant `pattern || ...`
+    // enters only when value is a string and builds `new RegExp(undefined)`,
+    // which JS evaluates to `/(?:)/` (matches everything), so the nested
+    // `!re.test(value)` is always false and no error is ever emitted. When
+    // pattern is truthy both branches run the identical check.
+    file: 'configwatcher/src/impl/ConfigWatcher.ts',
+    line: 161,
+    original: '&&',
+    replacement: '||',
+    reason: 'RegExp(undefined) matches everything, so the falsy-pattern branch never errors either way.',
+  },
+  {
+    // `dryRun = false` default parameter on _reloadInternal. The single caller
+    // reload() always passes dryRun explicitly (its own default is false), so
+    // the private default is never read.
+    file: 'configwatcher/src/impl/ConfigWatcher.ts',
+    line: 474,
+    original: 'false',
+    replacement: 'true',
+    reason: 'Dead default: reload() always passes dryRun explicitly.',
+  },
+  {
+    // `while (targetIdx >= 0 && checkpointList[targetIdx].source === "rollback")`.
+    // No code path ever pushes a checkpoint whose source === "rollback" (rollback
+    // never calls _checkpoint), so the second operand is always false and the
+    // loop body never runs for either comparison operator.
+    file: 'configwatcher/src/impl/ConfigWatcher.ts',
+    line: 555,
+    original: '>=',
+    replacement: '<',
+    reason: 'No rollback-source checkpoint is ever created; the loop never executes for either operator.',
+  },
+  {
+    // `return { success: false, ... }` in the targetIdx < 0 branch. Because
+    // checkpointList.length >= 2 is guaranteed by the guard above, after pop()
+    // the length is >= 1 and targetIdx = length-1 >= 0; the loop above never
+    // decrements (see L555), so targetIdx < 0 is unreachable.
+    file: 'configwatcher/src/impl/ConfigWatcher.ts',
+    line: 561,
+    original: 'false',
+    replacement: 'true',
+    reason: 'targetIdx < 0 branch is unreachable when no rollback-source checkpoint exists.',
+  },
+  {
+    // `dryRun: false` in the same unreachable targetIdx < 0 branch as L561.
+    file: 'configwatcher/src/impl/ConfigWatcher.ts',
+    line: 566,
+    original: 'false',
+    replacement: 'true',
+    reason: 'targetIdx < 0 branch is unreachable when no rollback-source checkpoint exists.',
+  },
+  {
+    // `const mode = options.mode || "poll"` in startFileWatch. The local `mode`
+    // is used only by the guard `if (mode === "none") return`. The only public
+    // observable (fileWatchActive) reads `watchState.options.mode` (the raw
+    // spread option), not this local. For mode="none" both branches leave
+    // fileWatchActive false; for any truthy mode both leave it true.
+    file: 'configwatcher/src/impl/ConfigWatcher.ts',
+    line: 435,
+    original: '||',
+    replacement: '&&',
+    reason: 'Local mode only gates the none-return; fileWatchActive reads raw options.mode, making || and && indistinguishable.',
+  },
+  {
+    // `const interval = options.pollIntervalMs || 5000` in startFileWatch. The
+    // interval feeds setInterval(() => this._pollFiles(), interval), but
+    // _pollFiles -> _loadFiles is a no-op stub with no observable side effect,
+    // so a 0ms vs 5000ms timer interval is invisible to any test.
+    file: 'configwatcher/src/impl/ConfigWatcher.ts',
+    line: 436,
+    original: '||',
+    replacement: '&&',
+    reason: 'interval drives a no-op poll stub; different timer periods have no observable effect.',
+  },
 ];
 
 function isEquivalentMutant(filePath: string, m: { line: number; original: string; replacement: string }): EquivalentMutant | undefined {

@@ -94,11 +94,24 @@ describe("CHAOS-M: SeededRNG", () => {
     // Mulberry32 with seed 42 produces a deterministic sequence
     const rng = new SeededRNG(42);
     const seq = [rng.next(), rng.next(), rng.next()];
-    // Verify the PRNG state transitions correctly (arithmetic mutants)
-    expect(seq[0]).toBeGreaterThanOrEqual(0);
-    expect(seq[0]).toBeLessThan(1);
-    expect(seq[1]).not.toBe(seq[0]); // + A state change produces new value
-    expect(seq[2]).not.toBe(seq[1]);
+    // Exact values pin the + A state transition and the mixing step; any
+    // arithmetic mutant (+ -> -, or the t-mixing + -> -) breaks these.
+    expect(seq[0]).toBeCloseTo(0.6011037519, 9);
+    expect(seq[1]).toBeCloseTo(0.4482905590, 9);
+    expect(seq[2]).toBeCloseTo(0.8524657935, 9);
+  });
+
+  it("M07.3b: pick uses * index scaling (seed 42 -> index 3)", () => {
+    const rng = new SeededRNG(42);
+    // next() = 0.6011 -> floor(0.6011 * 5) = 3 -> "d"
+    // a * -> / mutant gives floor(0.6011 / 5) = 0 -> "a"
+    expect(rng.pick(["a", "b", "c", "d", "e"])).toBe("d");
+  });
+
+  it("M07.3c: shuffle uses * index scaling (seed 42 exact permutation)", () => {
+    const rng = new SeededRNG(42);
+    // * -> / mutant would collapse j to 0 and change the permutation
+    expect(rng.shuffle([1, 2, 3, 4, 5])).toEqual([1, 5, 3, 2, 4]);
   });
 
   it("M07.3: state wraps correctly at 2^32 boundary", () => {
@@ -566,5 +579,122 @@ describe("CHAOS-M: ChaosEngineV2 Scenario Runner", () => {
     const id = await engine.inject({ type: "message-loss", targets: ["ghost-node"], config: { lossRate: 0.3 }, durationMs: 0 });
     expect(id).toBeTruthy();
     expect(typeof id).toBe("string");
+  });
+});
+
+describe("CHAOS-M: post-fix exact survivors", () => {
+  let engine: ChaosEngineV2;
+  beforeEach(async () => {
+    engine = new ChaosEngineV2();
+    await engine.start([makeTransport("t1"), makeTransport("t2"), makeTransport("t3")]);
+  });
+  afterEach(async () => { try { await engine.stop(); } catch {} });
+
+  it("L114 stop() clears started flag (false -> true)", async () => {
+    await engine.stop();
+    // after stop, inject must fail with not-started; mutant (started=true) would proceed
+    await expect(engine.inject({ type: "node-crash", targets: ["t1"], durationMs: 0 })).rejects.toThrow("not started");
+  });
+
+  it("L269 duration is elapsed (Date.now - startTime)", async () => {
+    const result = await engine.runScenario({
+      name: "dur", seed: 0, maxDurationMs: 60000,
+      steps: [{ fault: { type: "node-crash", targets: ["t1"], durationMs: 0 }, waitMs: 0, invariants: [] }],
+    }, { checkAll: async () => [] });
+    // elapsed must be a small non-negative value; a `-` -> `+` mutant yields a huge ~2*epoch value
+    expect(result.durationMs).toBeGreaterThanOrEqual(0);
+    expect(result.durationMs).toBeLessThan(60_000);
+  });
+
+  it("L255 step-completed listener receives 1-based step (i+1)", async () => {
+    const received: Array<[number, number]> = [];
+    engine.onStepCompleted((step, total) => received.push([step, total]));
+    await engine.runScenario({
+      name: "steps", seed: 0, maxDurationMs: 60000,
+      steps: [{ fault: { type: "node-crash", targets: ["t1"], durationMs: 0 }, waitMs: 0, invariants: [] }],
+    }, { checkAll: async () => [] });
+    // single step -> step 1, total 1 (i+1 = 1, not -1)
+    expect(received).toEqual([[1, 1]]);
+  });
+
+  it("L233 injection-failure log carries 1-based step (i+1)", async () => {
+    const result = await engine.runScenario({
+      name: "injfail", seed: 0, maxDurationMs: 60000,
+      steps: [{ fault: { type: "nonexistent-fault" as any, targets: ["t1"], durationMs: 0 }, waitMs: 0, invariants: [] }],
+    }, { checkAll: async () => [] });
+    expect(result.errors.length).toBeGreaterThan(0);
+    expect(result.errors[0]).toContain("step 1:");
+  });
+
+  it("L248 invariant-check failure log carries 1-based step (i+1)", async () => {
+    const result = await engine.runScenario({
+      name: "invfail", seed: 0, maxDurationMs: 60000,
+      steps: [{ fault: { type: "node-crash", targets: ["t1"], durationMs: 0 }, waitMs: 0, invariants: [{ name: "up", threshold: 0 } as any] }],
+    }, { checkAll: async () => { throw new Error("boom"); } });
+    expect(result.errors.length).toBeGreaterThan(0);
+    expect(result.errors[0]).toContain("step 1:");
+  });
+
+  it("L329 network-partition excludes self from peers (!== -> ===)", async () => {
+    // fresh engine with a transport that records its isolate() peers
+    const isolatedCalls: Record<string, string[]> = {};
+    const mk = (id: string) => ({
+      transportId: id,
+      start: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+      isolate: vi.fn((peers: string[]) => { isolatedCalls[id] = peers; }),
+      setLatency: vi.fn(),
+      setMessageLoss: vi.fn(),
+      healAll: vi.fn(),
+      getStats: vi.fn(() => ({ transportId: id })),
+    });
+    const e = new ChaosEngineV2();
+    const a = mk("a"), b = mk("b"), c = mk("c");
+    await e.start([a as any, b as any, c as any]);
+    await e.inject({ type: "network-partition", targets: ["a"], config: {}, durationMs: 0 });
+    // a isolates its peers b and c, never itself
+    expect(isolatedCalls["a"]).toBeDefined();
+    expect(isolatedCalls["a"]).not.toContain("a");
+    expect(isolatedCalls["a"]).toContain("b");
+    expect(isolatedCalls["a"]).toContain("c");
+  });
+});
+
+describe("CHAOS-M: timeout + cascade stagger survivors", () => {
+  let engine: ChaosEngineV2;
+  beforeEach(async () => {
+    engine = new ChaosEngineV2();
+    await engine.start([makeTransport("t1"), makeTransport("t2"), makeTransport("t3")]);
+  });
+  afterEach(async () => { vi.useRealTimers(); try { await engine.stop(); } catch {} });
+
+  it("L227 timeout log carries 1-based step (i+1)", async () => {
+    // two steps with a short wait; by the second iteration elapsed > maxDurationMs
+    // triggers the timeout log "step 2/2" (i+1 = 2, not -1)
+    const result = await engine.runScenario({
+      name: "timeout", seed: 0, maxDurationMs: 5,
+      steps: [
+        { fault: { type: "node-crash", targets: ["t1"], durationMs: 0 }, waitMs: 15, invariants: [] },
+        { fault: { type: "node-crash", targets: ["t1"], durationMs: 0 }, waitMs: 1, invariants: [] },
+      ],
+    }, { checkAll: async () => [] });
+    expect(result.errors.length).toBeGreaterThan(0);
+    expect(result.errors[0]).toContain("step 2/2");
+  });
+
+  it("L394 cascading-failure staggers between non-final targets (< -> >=, - -> +)", async () => {
+    // spy setTimeout to count stagger sleeps for a 3-target cascading failure
+    const realSetTimeout = globalThis.setTimeout;
+    let sleepCount = 0;
+    vi.spyOn(globalThis, "setTimeout").mockImplementation(((
+      fn: (...args: unknown[]) => void, ms?: number,
+    ) => {
+      sleepCount++;
+      return realSetTimeout(() => fn(), 0) as any;
+    }) as any);
+    await engine.inject({ type: "cascading-failure", targets: ["t1", "t2", "t3"], config: { staggerMs: 10 }, durationMs: 0 });
+    // 3 targets -> 2 stagger sleeps (not 1, not 3)
+    expect(sleepCount).toBe(2);
+    vi.restoreAllMocks();
   });
 });

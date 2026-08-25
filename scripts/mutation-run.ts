@@ -334,6 +334,42 @@ const EQUIVALENT_MUTANTS: EquivalentMutant[] = [
     replacement: 'false',
     reason: 'critical is a write-only field; no public API or status computation reads it.',
   },
+  {
+    // `async loadKey(wrapped, unwrapNow = true)` in KeyManager. The `unwrapNow`
+    // default is dead: the `if (unwrapNow)` and `else` branches are byte-for-byte
+    // identical (both `await unwrapKey` then `keyHistory.set`), so the parameter
+    // value never alters behavior and a true → false default is unobservable.
+    file: 'security/src/impl/KeyManager.ts',
+    line: 108,
+    original: 'true',
+    replacement: 'false',
+    reason: 'unwrapNow branches are identical; the parameter value has no observable effect.',
+  },
+  {
+    // `if (!key || key.length === 0)` in AES256GCMEncryptionProvider.decrypt.
+    // `key = this.keyHistory.get(version) ?? this.masterKey`, and masterKey is a
+    // 32-byte Buffer set by initialize()/rotateKey() and never zeroed. So `key`
+    // is always non-empty, making both `!key` and `key.length === 0` always
+    // false; `||` vs `&&` is unobservable.
+    file: 'security/src/impl/AES256GCMEncryptionProvider.ts',
+    line: 107,
+    original: '||',
+    replacement: '&&',
+    reason: 'key always resolves to non-empty masterKey; both guard operands are always false.',
+  },
+  {
+    // `if (!this.enabled || !this.masterKey || this.masterKey.length === 0)` in
+    // _ensureInitialized. `enabled` is set true only in initialize() and never
+    // cleared; `masterKey` is a non-empty Buffer set by initialize()/rotateKey().
+    // All three operands flip together: all-true when uninitialized (throw) and
+    // all-false when initialized (no throw). No intermediate state exists, so
+    // both `||` → `&&` mutations are equivalent.
+    file: 'security/src/impl/AES256GCMEncryptionProvider.ts',
+    line: 170,
+    original: '||',
+    replacement: '&&',
+    reason: 'enabled/masterKey/length flip together; no intermediate state distinguishes || from &&.',
+  },
 ];
 
 function isEquivalentMutant(filePath: string, m: { line: number; original: string; replacement: string }): EquivalentMutant | undefined {
@@ -549,8 +585,16 @@ function applyMutantInPlace(fp: string, m: Mutant): void {
   const lines = source.split('\n');
   const targetLine = m.line - 1; // 0-indexed
   if (targetLine < lines.length) {
-    // Replace only the FIRST occurrence of the operator on the target line
-    lines[targetLine] = lines[targetLine]!.replace(m.original, m.replacement);
+    const line = lines[targetLine]!;
+    // Replace the operator at its exact column offset `m.col`. A plain
+    // String.replace would always hit the FIRST occurrence, which is wrong for
+    // lines carrying the same operator more than once (e.g. `a || b || c`):
+    // the second `||` mutant would silently test the first `||`, mis-reporting
+    // an equivalent mutant as survived.
+    const col = m.col;
+    const before = line.slice(0, col);
+    const after = line.slice(col + m.original.length);
+    lines[targetLine] = before + m.replacement + after;
   }
   writeFileSync(fp, lines.join('\n'));
 }

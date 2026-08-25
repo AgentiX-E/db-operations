@@ -321,6 +321,19 @@ const EQUIVALENT_MUTANTS: EquivalentMutant[] = [
     replacement: '&&',
     reason: 'interval drives a no-op poll stub; different timer periods have no observable effect.',
   },
+  {
+    // `critical: options?.critical ?? true` in HealthOrchestrator.registerComponent.
+    // The stored `critical` flag is written but never read anywhere: the only
+    // public detail accessor, getComponentHealth(), returns componentId/name/
+    // liveness/readiness/uptime/lastError and omits critical; getAggregateStatus()
+    // derives status purely from liveness/readiness. A true → false default is
+    // therefore unobservable (dead field).
+    file: 'health/src/impl/HealthOrchestrator.ts',
+    line: 47,
+    original: 'true',
+    replacement: 'false',
+    reason: 'critical is a write-only field; no public API or status computation reads it.',
+  },
 ];
 
 function isEquivalentMutant(filePath: string, m: { line: number; original: string; replacement: string }): EquivalentMutant | undefined {

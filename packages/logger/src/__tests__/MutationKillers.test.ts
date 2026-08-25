@@ -149,4 +149,19 @@ describe("L-M: InMemoryLogger _log overloads", () => {
     // null is neither string nor object → enters else-if extra-string check
     expect(e[0].message).toBe("fallback message");
   });
+
+  it("L143: log(msg, string) — non-object extra keeps validCtx false (no string-index leak)", () => {
+    // L143 `let validCtx = false` → `true`: when extra is a string (non-object,
+    // non-array), extraIsObject is false so validCtx keeps its initial value.
+    // Mutant (validCtx=true) would pass the raw string as extraCtx, and the
+    // spread `{...this._context, ..."str"}` leaks string indices (0,1,2...) into
+    // context. Original keeps context free of those indices.
+    logger.info("hello", "extraString");
+    const e = logger.getEntries();
+    expect(e).toHaveLength(1);
+    expect(e[0].message).toBe("hello");
+    // Original: no numeric string indices leak into context
+    expect(Object.keys(e[0].context)).not.toContain("0");
+    expect(e[0].context).toEqual({});
+  });
 });

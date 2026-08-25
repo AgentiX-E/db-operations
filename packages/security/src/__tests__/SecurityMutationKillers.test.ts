@@ -113,17 +113,17 @@ describe("SEC-MK: InMemoryTLSManager date arithmetic", () => {
     expect(info.daysRemaining).toBe(30);
   });
 
-  it("reloadCerts: validFrom ~30 days ahead, validTo ~60 days ahead (L37/L38)", async () => {
+  it("reloadCerts: validFrom ~30 days in the past, validTo ~60 days ahead (L37/L38)", async () => {
     const tls = new InMemoryTLSManager();
     await tls.loadConfig({ certPath: "/c.crt", keyPath: "/c.key" } as any);
     await tls.reloadCerts();
     const info = await tls.getCertInfo();
     const now = Date.now();
     const DAY = 86_400_000;
-    // reloadCerts sets validFrom = now + 86400000*30 (L37), validTo = now + 86400000*60 (L38).
-    // `*`→`/` mutants collapse these to ~24min/1.44min ahead.
+    // reloadCerts sets validFrom = now - 86400000*30 (L37), validTo = now + 86400000*60 (L38).
+    // `*`→`/` mutants collapse these to ~24min back/ahead.
     const fromOffsetDays = (new Date(info.validFrom).getTime() - now) / DAY;
-    expect(fromOffsetDays).toBeCloseTo(30, 1);
+    expect(fromOffsetDays).toBeCloseTo(-30, 1);
     const toOffsetDays = (new Date(info.validTo).getTime() - now) / DAY;
     expect(toOffsetDays).toBeCloseTo(60, 1);
     expect(info.daysRemaining).toBe(60);

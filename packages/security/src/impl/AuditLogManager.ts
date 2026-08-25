@@ -53,7 +53,7 @@ export class AuditLogManager implements IAuditLogger {
       minRetain: options?.retention?.minRetain ?? 1000,
     };
 
-    if (options?.autoStart !== true) {
+    if (options?.autoStart === true) {
       this._startAutoFlush();
     }
   }

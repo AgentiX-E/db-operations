@@ -370,6 +370,19 @@ const EQUIVALENT_MUTANTS: EquivalentMutant[] = [
     replacement: '&&',
     reason: 'enabled/masterKey/length flip together; no intermediate state distinguishes || from &&.',
   },
+  {
+    // EnvelopeEncryptionProvider.importKey delegates to
+    // `this.keyManager.loadKey(wrapped, true)`. The `true` (unwrapNow) argument
+    // is inert: KeyManager.loadKey's `if (unwrapNow)` and `else` branches are
+    // byte-for-byte identical (both `await unwrapKey` then `keyHistory.set`), so
+    // a `true` → `false` mutation here is unobservable (already registered for
+    // KeyManager L108's default parameter).
+    file: 'security/src/impl/EnvelopeEncryptionProvider.ts',
+    line: 210,
+    original: 'true',
+    replacement: 'false',
+    reason: 'loadKey unwrapNow branches are identical; the boolean argument has no observable effect.',
+  },
 ];
 
 function isEquivalentMutant(filePath: string, m: { line: number; original: string; replacement: string }): EquivalentMutant | undefined {

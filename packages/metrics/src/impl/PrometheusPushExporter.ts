@@ -64,7 +64,7 @@ function snapshotToPrometheus(snapshot: MetricsSnapshot): string {
         // Extract clean name (strip _count/_sum)
         // Clean name extraction kept for future histogram label grouping
         void (p.name.replace(/_count$/, '').replace(/_sum$/, '') satisfies string);
-        const labelKey = p.labels.map((l) => `${l.key}=${l.value}`).sort().join(',');
+        const labelKey = (p.labels ?? []).map((l) => `${l.key}=${l.value}`).sort().join(',');
         if (!labelGroups.has(labelKey)) labelGroups.set(labelKey, []);
         labelGroups.get(labelKey)!.push(p);
       }
